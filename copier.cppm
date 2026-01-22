@@ -27,6 +27,7 @@ struct Config
 {
     std::string src_dir;
     std::string dst_dir;
+    bool open_crop{false};
 };
 
 /**
@@ -63,6 +64,13 @@ void load_config(Config& config, const std::string_view path = "./config.json")
         const auto msg = std::string("Missing or incorrect fields in configuration: dst_dir");
         Error("{}",msg);
         throw std::runtime_error(msg);
+    }
+    if (j.contains("openCrop") && j["openCrop"].is_boolean())
+    {
+        config.open_crop = j["openCrop"].get<bool>();
+    }else
+    {
+        config.open_crop=false;
     }
 }
 
@@ -153,7 +161,6 @@ void Copier::copy()
         std::cout<< "<============== [ Task-" << task_index <<" 开始拷贝... ] ==============>" << std::endl;
         std::cout<< "标签名称: " << label_name << ", 文件数量: " << count << std::endl;
         std::cout<< "源目录: " << src_last_dir.string() << std::endl;
-        // std::cout<< "重命名源目录: " << src_last_rename_dir.string() << std::endl;
         std::cout<< "目标目录: " << dst_last_dir.string() << std::endl;
         BlockProgressBar bar{
             option::BarWidth{80},
@@ -176,10 +183,11 @@ void Copier::copy()
             {
                 std::filesystem::create_directories(dst_absolute_parent_path);
             }
+            // TODO: 进行图片裁剪操作
             std::filesystem::copy_file(src_absolute_path,dst_absolute_path,std::filesystem::copy_options::overwrite_existing);
+
             bar.set_option(option::PostfixText{std::format("{}/{}",index++, count)});
             bar.tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
         // std::filesystem::rename(src_last_dir,src_last_rename_dir);
         bar.mark_as_completed();

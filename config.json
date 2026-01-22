@@ -1,4 +1,5 @@
 {
   "srcDir": "D:\\test\\src",
-  "dstDir": "D:\\test\\target"
+  "dstDir": "D:\\test\\target",
+  "openCrop": true
 }
