@@ -1,5 +1,6 @@
 {
-  "srcDir": "D:\\test\\src",
-  "dstDir": "D:\\test\\target",
-  "openCrop": false
+  "srcDir": "D:\\test\\copy\\src",
+  "dstDir": "D:\\test\\copy\\dst",
+  "openCrop": false,
+  "model": "best.engine"
 }

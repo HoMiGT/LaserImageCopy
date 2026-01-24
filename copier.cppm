@@ -13,10 +13,12 @@ module;
 #include <indicators/block_progress_bar.hpp>
 #include <indicators/cursor_control.hpp>
 #include <nlohmann/json.hpp>
+#include <opencv2/opencv.hpp>
 
 export module copier;
 
 import logger;
+import detecter;
 
 /**
  * @brief 配置结构体
@@ -28,21 +30,23 @@ struct Config
     std::string src_dir;
     std::string dst_dir;
     bool open_crop{false};
+    std::string model;
 };
 
 /**
  * @brief 加载配置文件
- * @param config 配置结构体引用
  * @param path 配置文件路径，默认"./config.json"
+ * @return Config 配置结构体
  */
-void load_config(Config& config, const std::string_view path = "./config.json")
+Config load_config(const std::string_view path = "./config.json")
 {
+    Config config;
     std::ifstream ifs(path.data());
     if (!ifs.is_open())
     {
-        const auto msg = std::format("Failed to open config file: {}",path);
+        const auto msg = std::format("Failed to open config file: {}",path.data());
         Error("{}", msg);
-        throw std::runtime_error(msg);
+        return config;
     }
     nlohmann::json j;
     ifs >> j;
@@ -53,7 +57,7 @@ void load_config(Config& config, const std::string_view path = "./config.json")
     {
         const auto msg = std::string("Missing or incorrect fields in configuration: src_dir");
         Error("{}", msg);
-        throw std::runtime_error(msg);
+        return config;
     }
 
     if (j.contains("dstDir")&&j["dstDir"].is_string())
@@ -63,7 +67,7 @@ void load_config(Config& config, const std::string_view path = "./config.json")
     {
         const auto msg = std::string("Missing or incorrect fields in configuration: dst_dir");
         Error("{}",msg);
-        throw std::runtime_error(msg);
+        return config;
     }
     if (j.contains("openCrop") && j["openCrop"].is_boolean())
     {
@@ -72,6 +76,16 @@ void load_config(Config& config, const std::string_view path = "./config.json")
     {
         config.open_crop=false;
     }
+    if (j.contains("model") && j["model"].is_string())
+    {
+        config.model = j["model"].get<std::string>();
+    }else
+    {
+        const auto msg = std::string("Missing or incorrect fields in configuration: model");
+        Error("{}",msg);
+        return config;
+    }
+    return config;
 }
 
 /**
@@ -125,22 +139,37 @@ private:
     Config m_config{};
     unsigned int m_threadCount{0};
     CopyDirInfo m_copyFileInfo;
+    Recognize m_recognize{};
+    Location m_location;
+    bool is_ok{ false };
 
     void collect_files();
+    cv::Mat crop(const std::filesystem::path& src_path,
+              const std::filesystem::path& dst_path, cv::Mat& mat_end, bool is_only_end = false);
 };
 
-
 Copier::Copier()
+    :m_config{load_config()}
+    ,m_location{m_config.model}
 {
-    load_config(m_config);
+    if (m_config.src_dir.empty())
+    {
+		Error("配置文件没有加载成功！");
+        return;
+    }
     m_threadCount = std::thread::hardware_concurrency();
     m_copyFileInfo.src_root = std::filesystem::path(m_config.src_dir);
     m_copyFileInfo.dst_root = std::filesystem::path(m_config.dst_dir);
-
+    is_ok = true;
 }
 
 void Copier::copy()
 {
+    if (!is_ok)
+    {
+        std::cout<< "拷贝器没有初始化成功，无法进行拷贝操作!" << std::endl;
+        return;
+	}
     collect_files();
     std::cout<< "拷贝的任务总数: " << m_copyFileInfo.dir_files.size() << std::endl;
     std::cout<< "拷贝文件的数量: " << m_copyFileInfo.count << std::endl;
@@ -174,6 +203,7 @@ void Copier::copy()
         const auto now = std::chrono::system_clock::now();
         const auto now_str = std::format("{:%Y-%m-%d %H:%M:%S}", now);
         std::cout<< "拷贝开始时间: " << now_str << std::endl;
+        cv::Mat mat_end;
         for (const auto& file_name: file_names)
         {
             const auto src_absolute_path = src_last_dir / file_name;
@@ -183,12 +213,11 @@ void Copier::copy()
             {
                 std::filesystem::create_directories(dst_absolute_parent_path);
             }
-            // TODO: 进行图片裁剪操作
-            std::filesystem::copy_file(src_absolute_path,dst_absolute_path,std::filesystem::copy_options::overwrite_existing);
-
+            mat_end = crop(src_absolute_path,dst_absolute_path,mat_end);
             bar.set_option(option::PostfixText{std::format("{}/{}",index++, count)});
             bar.tick();
         }
+        // 测试先注释掉重命名操作
         // std::filesystem::rename(src_last_dir,src_last_rename_dir);
         bar.mark_as_completed();
         std::cout<< "拷贝结束时间: " << std::format("{:%Y-%m-%d %H:%M:%S}", std::chrono::system_clock::now()) << std::endl;
@@ -263,4 +292,32 @@ void Copier::collect_files()
         }
     }
     m_copyFileInfo.count = sum;
+}
+
+
+cv::Mat Copier::crop(const std::filesystem::path& src_path,
+              const std::filesystem::path& dst_path, cv::Mat& mat_end, const bool is_only_end)
+{
+    const cv::Mat src = cv::imread(src_path.string(), cv::IMREAD_GRAYSCALE);
+    cv::imwrite("../src.png",src);
+    if (src.empty())
+    {
+        throw std::runtime_error("读取图片失败: " + src_path.string());
+    }
+    constexpr std::array<double,6> crop_rates{1/4,1/3,1/2,2/3,3/4,1.0};
+    const auto width = src.cols;
+    const auto height = src.rows;
+    for (const auto& rate: crop_rates)
+    {
+        const auto rect = cv::Rect2i{0,0,static_cast<int>(width * rate), static_cast<int>(height * rate)};
+        cv::Mat mat_find_params = src(rect);
+        cv::imwrite("../find.png",mat_find_params);
+    }
+
+    // 判断是否只裁剪末端
+    if (is_only_end)
+    {
+
+    }
+    return cv::Mat{};
 }

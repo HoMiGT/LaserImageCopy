@@ -31,7 +31,14 @@ public:
     Recognize();
     ~Recognize()=default;
 
-    bool detect(const cv::Mat &gray, std::string& qrcode);
+    /**
+     * @brief 检测二维码
+     * @param gray 单通道灰度图像
+     * @param qrcode 识别到的二维码内容
+     * @param orientation 二维码方向 0:上 1:右 2:下 3:左
+     * @return
+     */
+    bool detect(const cv::Mat &gray, std::string& qrcode, int& orientation);
     [[nodiscard]] std::string what() const;
 
 private:
@@ -44,7 +51,7 @@ Recognize::Recognize()
     m_scanner.set_config(zbar::ZBAR_QRCODE,zbar::ZBAR_CFG_ENABLE,1);
 }
 
-bool Recognize::detect(const cv::Mat &gray, std::string& qrcode)
+bool Recognize::detect(const cv::Mat &gray, std::string& qrcode,int& orientation)
 {
     if (gray.channels() !=1)
     {
@@ -63,6 +70,9 @@ bool Recognize::detect(const cv::Mat &gray, std::string& qrcode)
                 if (const auto quality = symbol->get_quality(); quality > high_quality)
                 {
                     qrcode = symbol->get_data();
+                    orientation = symbol->get_orientation();
+                    const auto x0 = symbol->get_location_x(0);
+                    const auto y0  = symbol->get_location_y(0);
                     high_quality = quality;
                 }else
                 {
@@ -118,9 +128,10 @@ export class Location
 public:
     explicit Location(std::string_view model_path);
     ~Location();
+
     bool build();
-    bool infer(const cv::Mat& src, std::vector<cv::Rect>& boxes);
-    std::string what() const;
+    bool infer(const cv::Mat& src, std::vector<cv::Rect2i>& boxes);
+    [[nodiscard]] std::string what() const;
     cv::Mat m_letter_dst;
 
 private:
@@ -132,20 +143,20 @@ private:
     int m_output_index{1};
     const char* m_input_name{nullptr};
     const char* m_output_name{nullptr};
-    nvinfer1::Dims m_input_dims;
-    nvinfer1::Dims m_output_dims;
+    nvinfer1::Dims m_input_dims{};
+    nvinfer1::Dims m_output_dims{};
     size_t m_input_size{0};
     size_t m_output_size{0};
     std::string m_error{};
-    std::array<void*,2> m_buffers;
+    std::array<void*,2> m_buffers{};
     std::vector<__half> m_input_data;
     std::vector<__half> m_output_data;
     std::vector<float> m_output_float_data;
-    cudaStream_t m_stream;
+    cudaStream_t m_stream{};
 
     static void letterbox(const cv::Mat& src, cv::Mat& dst, size_t nw, size_t nh);
     bool preprocess(const cv::Mat& src) noexcept;
-    bool postprocess(std::vector<cv::Rect>& boxes) noexcept;
+    bool postprocess(std::vector<cv::Rect2i>& boxes) noexcept;
     bool serialize();
 
     static size_t get_size_by_dims(const nvinfer1::Dims& dims);
@@ -248,7 +259,7 @@ bool Location::build()
     return true;
 }
 
-bool Location::infer(const cv::Mat& src, std::vector<cv::Rect>& boxes)
+bool Location::infer(const cv::Mat& src, std::vector<cv::Rect2i>& boxes)
 {
     if (!preprocess(src))
     {
@@ -358,7 +369,7 @@ bool Location::preprocess(const cv::Mat& src) noexcept
     }
 }
 
-bool Location::postprocess(std::vector<cv::Rect>& boxes) noexcept
+bool Location::postprocess(std::vector<cv::Rect2i>& boxes) noexcept
 {
     try
     {
@@ -380,7 +391,7 @@ bool Location::postprocess(std::vector<cv::Rect>& boxes) noexcept
         std::vector<int> class_ids;
         std::vector<float> class_scores;
         cv::Point class_id;
-        std::vector<cv::Rect> suspected_boxes;
+        std::vector<cv::Rect2i> suspected_boxes;
         double max_class_score{0.0};
         for (auto r{0}; r<rows; ++r)
         {
@@ -397,12 +408,11 @@ bool Location::postprocess(std::vector<cv::Rect>& boxes) noexcept
             const auto h = output_mat.at<float>(r,3);
             const auto left = static_cast<int>(cx - 0.5 * w);
             const auto top = static_cast<int>(cy - 0.5 * h);
-            suspected_boxes.emplace_back(cv::Rect{left,top,static_cast<int>(w),static_cast<int>(h)});
+            suspected_boxes.emplace_back(cv::Rect2i{left,top,static_cast<int>(w),static_cast<int>(h)});
         }
         cv::dnn::NMSBoxes(suspected_boxes, class_scores, score_threshold, nms_threshold,class_ids);
-        for (auto i=0; i<class_ids.size(); ++i)
+        for (const int id : class_ids)
         {
-            const auto id = class_ids[i];
             boxes.emplace_back(suspected_boxes[id]);
         }
         return true;
@@ -415,7 +425,7 @@ bool Location::postprocess(std::vector<cv::Rect>& boxes) noexcept
 
 bool Location::serialize()
 {
-    const auto last_dot = m_model_path.find_last_of(".");
+    const auto last_dot = m_model_path.find_last_of('.');
     std::string prefix;
     if (last_dot != std::string::npos)
     {
@@ -478,7 +488,7 @@ size_t Location::get_size_by_dims(const nvinfer1::Dims& dims)
     auto size = 1;
     for (auto i{0}; i < dims.nbDims; ++i)
     {
-        size *= dims.d[i];
+        size *= static_cast<size_t>(dims.d[i]);
     }
     return size;
 }
