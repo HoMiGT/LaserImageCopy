@@ -1,5 +1,4 @@
 #include <iostream>
-#include <thread>
 
 import logger;
 import copier;
@@ -16,7 +15,6 @@ int main()
     Logger::set_level(Logger::LogLevel::Debug);
     Copier copier;
     copier.copy();
-    std::this_thread::sleep_for(std::chrono::seconds(2));
     std::cout<<"输入任意字符并回车退出..."<<std::endl;
     std::cout << ">> ";
     std::string input;

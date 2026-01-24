@@ -160,7 +160,9 @@ Copier::Copier()
     m_threadCount = std::thread::hardware_concurrency();
     m_copyFileInfo.src_root = std::filesystem::path(m_config.src_dir);
     m_copyFileInfo.dst_root = std::filesystem::path(m_config.dst_dir);
-    is_ok = true;
+    if (m_location.build()) {
+        is_ok = true;
+    }
 }
 
 void Copier::copy()
@@ -243,7 +245,7 @@ static long long extract_number(const std::string &s,bool &ok)
 
 void sort_files(std::vector<std::string>& files)
 {
-    std::ranges::sort(files, [](const std::string& a, const std::string& b)
+    std::sort(files.begin(), files.end(), [](const std::string& a, const std::string& b)
     {
         bool ok_a{false};
         bool ok_b{false};
@@ -299,19 +301,46 @@ cv::Mat Copier::crop(const std::filesystem::path& src_path,
               const std::filesystem::path& dst_path, cv::Mat& mat_end, const bool is_only_end)
 {
     const cv::Mat src = cv::imread(src_path.string(), cv::IMREAD_GRAYSCALE);
-    cv::imwrite("../src.png",src);
+    cv::imwrite("src.png",src);
     if (src.empty())
     {
         throw std::runtime_error("读取图片失败: " + src_path.string());
     }
-    constexpr std::array<double,6> crop_rates{1/4,1/3,1/2,2/3,3/4,1.0};
+    constexpr std::array<double,6> crop_rates{ 1.0/4.0,1.0/3.0,1.0/2.0,2.0/3.0,3.0/4.0,1.0};
     const auto width = src.cols;
     const auto height = src.rows;
     for (const auto& rate: crop_rates)
     {
         const auto rect = cv::Rect2i{0,0,static_cast<int>(width * rate), static_cast<int>(height * rate)};
         cv::Mat mat_find_params = src(rect);
-        cv::imwrite("../find.png",mat_find_params);
+        
+        std::vector<cv::Rect2i> boxes;
+        if (auto ret = m_location.infer(mat_find_params, boxes); !ret) {
+            continue;
+        }
+		if (boxes.empty())
+        {
+            continue;
+        }
+        int index{0};
+        for (const auto& box : boxes)
+        {
+			auto cropped = mat_find_params(box);
+            cv::imwrite(std::format("crop_{}.png",index++),cropped);
+            std::string code{};
+			int direction{ -1 };
+            if (!cropped.isContinuous()) {
+				cropped = cropped.clone();
+            }
+            m_recognize.detect(cropped, code, direction);
+			std::cout << "识别结果: " << code << ", 方向: " << direction << std::endl;
+            cv::rectangle(mat_find_params, box, cv::Scalar(0), 4);
+
+        }
+        cv::imwrite("find.png", mat_find_params);
+        break;
+
+
     }
 
     // 判断是否只裁剪末端

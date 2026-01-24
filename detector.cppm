@@ -62,7 +62,7 @@ bool Recognize::detect(const cv::Mat &gray, std::string& qrcode,int& orientation
     zbar::Image img(width,height,"Y800",gray.data,width*height);
     try
     {
-        if (const auto ret = m_scanner.scan(img); ret >=0 )
+        if (const auto ret = m_scanner.scan(img); ret >0 )
         {
             auto high_quality = 0;
             for (auto symbol = img.symbol_begin(); symbol != img.symbol_end(); ++symbol)
@@ -73,6 +73,17 @@ bool Recognize::detect(const cv::Mat &gray, std::string& qrcode,int& orientation
                     orientation = symbol->get_orientation();
                     const auto x0 = symbol->get_location_x(0);
                     const auto y0  = symbol->get_location_y(0);
+					const auto x1 = symbol->get_location_x(1);
+					const auto y1 = symbol->get_location_y(1);
+					const auto x2 = symbol->get_location_x(2);
+					const auto y2 = symbol->get_location_y(2);
+					const auto x3 = symbol->get_location_x(3);
+					const auto y3 = symbol->get_location_y(3);
+                    std::cout<< "QRCode: " << qrcode << ", Orientation: " << orientation
+                             << ", Location: [(" << x0 << "," << y0 << "),("
+                             << x1 << "," << y1 << "),(" << x2 << "," << y2
+                             << "),(" << x3 << "," << y3 << ")]"
+						<< ", Quality: " << quality << std::endl;
                     high_quality = quality;
                 }else
                 {
@@ -100,7 +111,7 @@ class NvLogger: public nvinfer1::ILogger
 {
     void log(const nvinfer1::ILogger::Severity severity, const char* msg) noexcept override
     {
-        if (severity >= Severity::kERROR)
+        if (severity <= Severity::kERROR)
         {
             std::cerr << "NvLogger error: " << msg << std::endl;
         }
@@ -132,7 +143,6 @@ public:
     bool build();
     bool infer(const cv::Mat& src, std::vector<cv::Rect2i>& boxes);
     [[nodiscard]] std::string what() const;
-    cv::Mat m_letter_dst;
 
 private:
     std::string m_model_path{};
@@ -153,10 +163,16 @@ private:
     std::vector<__half> m_output_data;
     std::vector<float> m_output_float_data;
     cudaStream_t m_stream{};
+    double m_scale{ 0.0 };
+    int m_width{0};
+    int m_height{0};
+	int m_letter_width{ 0 };
+	int m_letter_height{ 0 };
 
-    static void letterbox(const cv::Mat& src, cv::Mat& dst, size_t nw, size_t nh);
+    void letterbox(const cv::Mat& src, cv::Mat& dst, size_t nw, size_t nh);
     bool preprocess(const cv::Mat& src) noexcept;
     bool postprocess(std::vector<cv::Rect2i>& boxes) noexcept;
+    cv::Rect2i de_letterbox(const cv::Rect2i&& box) noexcept;
     bool serialize();
 
     static size_t get_size_by_dims(const nvinfer1::Dims& dims);
@@ -215,9 +231,9 @@ bool Location::build()
     m_output_dims = m_engine->getTensorShape(m_output_name);
     m_input_size = get_size_by_dims(m_input_dims);
     m_output_size = get_size_by_dims(m_output_dims);
-    m_input_data.reserve(m_input_size);
-    m_output_data.reserve(m_output_size);
-    m_output_float_data.reserve(m_output_size);
+    m_input_data.resize(m_input_size);
+    m_output_data.resize(m_output_size);
+    m_output_float_data.resize(m_output_size);
     cudaMalloc(&m_buffers[m_input_index], sizeof(__half)* m_input_size);
     if (!m_context->setInputTensorAddress(m_input_name, m_buffers[m_input_index]))
     {
@@ -295,6 +311,7 @@ bool Location::infer(const cv::Mat& src, std::vector<cv::Rect2i>& boxes)
     }
     if (!postprocess(boxes))
     {
+		m_error = std::format("Postprocess failed: {}", m_error);
         return false;
     }
     return true;
@@ -307,20 +324,24 @@ std::string Location::what() const
 
 void Location::letterbox(const cv::Mat& src, cv::Mat& dst, const size_t nw, const size_t nh)
 {
-    const auto w = static_cast<double>(src.cols);
-    const auto h = static_cast<double>(src.rows);
+    m_width = src.cols;
+    m_height = src.rows;
+    m_letter_width = nw;
+    m_letter_height = nh;
+    const auto w = static_cast<double>(m_width);
+    const auto h = static_cast<double>(m_height);
     const auto nwd = static_cast<double>(nw);
     const auto nhd = static_cast<double>(nh);
-    const auto scale = std::min(nhd / h, nwd / w);
-    const auto sw = std::round(scale * w);
-    const auto sh = std::round(scale * h);
+    m_scale = std::min(nhd / h, nwd / w);
+    const auto sw = std::round(m_scale * w);
+    const auto sh = std::round(m_scale * h);
     auto dw = nwd - sw;
     auto dh = nhd - sh;
     dw /= 2.0;
     dh /= 2.0;
     if (w!=nwd || h != nhd)
     {
-        cv::resize(src,dst,cv::Size(static_cast<int>(sw),static_cast<int>(sh)),scale);
+        cv::resize(src,dst,cv::Size(static_cast<int>(sw),static_cast<int>(sh)), m_scale);
     }else
     {
         dst = src;
@@ -341,7 +362,7 @@ bool Location::preprocess(const cv::Mat& src) noexcept
         const auto width = m_input_dims.d[3];
         cv::Mat dst;
         letterbox(src, dst, width,height);
-        m_letter_dst = dst.clone();
+        //m_letter_dst = dst.clone();
         dst.convertTo(dst, CV_32F, 1.0f/ 255.0f);
         cvtColor(dst, dst, cv::COLOR_BGR2RGB);
         std::vector<cv::Mat> rgb;
@@ -408,7 +429,7 @@ bool Location::postprocess(std::vector<cv::Rect2i>& boxes) noexcept
             const auto h = output_mat.at<float>(r,3);
             const auto left = static_cast<int>(cx - 0.5 * w);
             const auto top = static_cast<int>(cy - 0.5 * h);
-            suspected_boxes.emplace_back(cv::Rect2i{left,top,static_cast<int>(w),static_cast<int>(h)});
+            suspected_boxes.emplace_back(de_letterbox(cv::Rect2i{left,top,static_cast<int>(w),static_cast<int>(h)}));
         }
         cv::dnn::NMSBoxes(suspected_boxes, class_scores, score_threshold, nms_threshold,class_ids);
         for (const int id : class_ids)
@@ -421,6 +442,24 @@ bool Location::postprocess(std::vector<cv::Rect2i>& boxes) noexcept
         m_error = std::format("postprocess error: {}", e.what());
         return false;
     }
+}
+
+cv::Rect2i Location::de_letterbox(const cv::Rect2i&& box) noexcept
+{
+    const double transformedWidth = std::round(m_width * m_scale);
+    const double transformedHeight = std::round(m_height * m_scale);
+    const double pad_w = (m_letter_width - transformedWidth) / 2.0;
+    const double pad_h = (m_letter_height - transformedHeight) / 2.0;
+    int x1 = static_cast<int>(std::round((box.x - pad_w) / m_scale));
+    int y1 = static_cast<int>(std::round((box.y - pad_h) / m_scale));
+    int w = static_cast<int>(std::round(box.width / m_scale));
+    int h = static_cast<int>(std::round(box.height / m_scale));
+    x1 = std::clamp(x1, 0, m_width - 1);
+    y1 = std::clamp(y1, 0, m_height - 1);
+    w = std::clamp(w, 0, m_width - x1);
+    h = std::clamp(h, 0, m_height - y1);
+    cv::Rect rect{ x1, y1, w, h };
+    return rect;
 }
 
 bool Location::serialize()
