@@ -22,6 +22,50 @@ module;
 
 export module detecter;
 
+
+export enum class QrOrientation {
+    UP = 0,
+    RIGHT = 1,
+    DOWN = 2,
+    LEFT = 3,
+	UNKNOW = -1
+};
+
+export inline std::ostream& operator<<(std::ostream& os, const QrOrientation& orientation)
+{
+    switch (orientation)
+    {
+    case QrOrientation::UP:
+        os << "UP";
+        break;
+    case QrOrientation::RIGHT:
+        os << "RIGHT";
+        break;
+    case QrOrientation::DOWN:
+        os << "DOWN";
+        break;
+    case QrOrientation::LEFT:
+        os << "LEFT";
+        break;
+    case QrOrientation::UNKNOW:
+        os << "UNKNOW";
+        break;
+    default:
+        os << "INVALID";
+        break;
+    }
+    return os;
+}
+
+export struct QrCodeResult {
+    std::string context;
+    QrOrientation orientation;
+    cv::Point2i LeftTop;
+    cv::Point2i LeftBottom;
+    cv::Point2i RightBottom;
+    cv::Point2i RightTop;
+};
+
 /**
  * @brief Zbar 二维码识别类
  */
@@ -38,7 +82,7 @@ public:
      * @param orientation 二维码方向 0:上 1:右 2:下 3:左
      * @return
      */
-    bool detect(const cv::Mat &gray, std::string& qrcode, int& orientation);
+    bool detect(const cv::Mat &gray, QrCodeResult& qrret);
     [[nodiscard]] std::string what() const;
 
 private:
@@ -51,11 +95,12 @@ Recognize::Recognize()
     m_scanner.set_config(zbar::ZBAR_QRCODE,zbar::ZBAR_CFG_ENABLE,1);
 }
 
-bool Recognize::detect(const cv::Mat &gray, std::string& qrcode,int& orientation)
+bool Recognize::detect(const cv::Mat &gray, QrCodeResult& qrret)
 {
     if (gray.channels() !=1)
     {
-        throw std::logic_error{"Only single channel grayscale images are supported"};
+		m_error = "Only single channel grayscale images are supported";
+        return false;
     }
     const auto width = gray.cols;
     const auto height = gray.rows;
@@ -69,21 +114,31 @@ bool Recognize::detect(const cv::Mat &gray, std::string& qrcode,int& orientation
             {
                 if (const auto quality = symbol->get_quality(); quality > high_quality)
                 {
-                    qrcode = symbol->get_data();
-                    orientation = symbol->get_orientation();
-                    const auto x0 = symbol->get_location_x(0);
-                    const auto y0  = symbol->get_location_y(0);
-					const auto x1 = symbol->get_location_x(1);
-					const auto y1 = symbol->get_location_y(1);
-					const auto x2 = symbol->get_location_x(2);
-					const auto y2 = symbol->get_location_y(2);
-					const auto x3 = symbol->get_location_x(3);
-					const auto y3 = symbol->get_location_y(3);
-                    std::cout<< "QRCode: " << qrcode << ", Orientation: " << orientation
-                             << ", Location: [(" << x0 << "," << y0 << "),("
-                             << x1 << "," << y1 << "),(" << x2 << "," << y2
-                             << "),(" << x3 << "," << y3 << ")]"
-						<< ", Quality: " << quality << std::endl;
+					qrret.context = symbol->get_data();
+                    const auto orientation = symbol->get_orientation();
+                    if (orientation == 0)
+                    {
+                        qrret.orientation = QrOrientation::UP;
+                    }
+                    else if (orientation == 1)
+                    {
+                        qrret.orientation = QrOrientation::RIGHT;
+                    }
+                    else if (orientation == 2)
+                    {
+                        qrret.orientation = QrOrientation::DOWN;
+                    }
+                    else if (orientation == 3)
+                    {
+                        qrret.orientation = QrOrientation::LEFT;
+                    }
+                    else {
+						qrret.orientation = QrOrientation::UNKNOW;
+                    }
+					qrret.LeftTop = cv::Point2i(symbol->get_location_x(0), symbol->get_location_y(0));
+					qrret.LeftBottom = cv::Point2i(symbol->get_location_x(1), symbol->get_location_y(1));
+					qrret.RightBottom = cv::Point2i(symbol->get_location_x(2), symbol->get_location_y(2));
+					qrret.RightTop = cv::Point2i(symbol->get_location_x(3), symbol->get_location_y(3));
                     high_quality = quality;
                 }else
                 {
@@ -434,6 +489,13 @@ bool Location::postprocess(std::vector<cv::Rect2i>& boxes) noexcept
         cv::dnn::NMSBoxes(suspected_boxes, class_scores, score_threshold, nms_threshold,class_ids);
         for (const int id : class_ids)
         {
+			const auto& box = suspected_boxes[id];
+            const auto aspect_ratio = box.width / box.height;
+            // 只保留接近正方形的框
+            if (aspect_ratio < 0.8f || aspect_ratio > 1.2f)
+            {
+                continue;
+            }
             boxes.emplace_back(suspected_boxes[id]);
         }
         return true;

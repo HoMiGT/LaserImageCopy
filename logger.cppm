@@ -74,7 +74,7 @@ public:
     template<typename... Args>
     static void critical(fmt::format_string<Args...> fmt, Args&&... args);
 
-    static void set_level(LogLevel level);
+    static void set_level(Logger::LogLevel level);
 
     static void flush();
 

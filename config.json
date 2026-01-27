@@ -2,5 +2,6 @@
   "srcDir": "D:\\test\\copy\\src",
   "dstDir": "D:\\test\\copy\\dst",
   "openCrop": false,
-  "model": "best.engine"
+  "model": "best.engine",
+  "extractConfigDir": "D:\\test\\extrat_config"
 }
