@@ -82,7 +82,7 @@ public:
      * @param orientation 二维码方向 0:上 1:右 2:下 3:左
      * @return
      */
-    bool detect(const cv::Mat &gray, QrCodeResult& qrret);
+    bool detect(const cv::Mat &input_mat, QrCodeResult& qrret);
     [[nodiscard]] std::string what() const;
 
 private:
@@ -95,16 +95,20 @@ Recognize::Recognize()
     m_scanner.set_config(zbar::ZBAR_QRCODE,zbar::ZBAR_CFG_ENABLE,1);
 }
 
-bool Recognize::detect(const cv::Mat &gray, QrCodeResult& qrret)
+bool Recognize::detect(const cv::Mat &input_mat, QrCodeResult& qrret)
 {
-    if (gray.channels() !=1)
+    cv::Mat gray;
+    if (input_mat.channels() !=1)
     {
-		m_error = "Only single channel grayscale images are supported";
-        return false;
+		cv::cvtColor(input_mat, gray, cv::COLOR_BGR2GRAY);
+    }
+    else {
+        gray = input_mat;
     }
     const auto width = gray.cols;
     const auto height = gray.rows;
     zbar::Image img(width,height,"Y800",gray.data,width*height);
+    bool is_ok{ false };
     try
     {
         if (const auto ret = m_scanner.scan(img); ret >0 )
@@ -140,6 +144,7 @@ bool Recognize::detect(const cv::Mat &gray, QrCodeResult& qrret)
 					qrret.RightBottom = cv::Point2i(symbol->get_location_x(2), symbol->get_location_y(2));
 					qrret.RightTop = cv::Point2i(symbol->get_location_x(3), symbol->get_location_y(3));
                     high_quality = quality;
+                    is_ok = true;
                 }else
                 {
                     img.set_data(nullptr,0);
@@ -148,7 +153,7 @@ bool Recognize::detect(const cv::Mat &gray, QrCodeResult& qrret)
             }
         }
         img.set_data(nullptr,0);
-        return true;
+        return is_ok;
     }catch (std::exception& e)
     {
         m_error = e.what();
@@ -490,7 +495,7 @@ bool Location::postprocess(std::vector<cv::Rect2i>& boxes) noexcept
         for (const int id : class_ids)
         {
 			const auto& box = suspected_boxes[id];
-            const auto aspect_ratio = box.width / box.height;
+            const auto aspect_ratio = static_cast<float>(box.width) / static_cast<float>(box.height);
             // 只保留接近正方形的框
             if (aspect_ratio < 0.8f || aspect_ratio > 1.2f)
             {

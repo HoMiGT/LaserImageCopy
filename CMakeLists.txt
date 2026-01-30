@@ -53,7 +53,7 @@ set(PROJECT_SOURCES
 	main.cpp
 )
 
-add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
+add_executable(${PROJECT_NAME} ${PROJECT_SOURCES} "threadpool.cppm")
 
 target_sources(${PROJECT_NAME} PRIVATE
 		FILE_SET cxx_modules
@@ -63,6 +63,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 			logger.cppm
 		    copier.cppm
 			detector.cppm
+			threadpool.cppm
 )
 target_include_directories(${PROJECT_NAME} PRIVATE
 		${CMAKE_CURRENT_SOURCE_DIR}

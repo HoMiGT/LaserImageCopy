@@ -129,7 +129,7 @@ void Logger::initialize(std::string_view log_dir, std::string_view app_name, siz
         {
             fs::create_directories(log_dir_path);
         }
-        spdlog::init_thread_pool(8192,1);
+        spdlog::init_thread_pool(4096, 1);
         std::vector<spdlog::sink_ptr> sinks;
         sinks.reserve(3);
 
