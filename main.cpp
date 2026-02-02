@@ -1,4 +1,5 @@
 #include <iostream>
+#include <opencv2/core/utils/logger.hpp>
 
 import logger;
 import copier;
@@ -11,8 +12,9 @@ import copier;
 /// 5. 根据行间距以及每个完整标签的高度，截取出每个完整标签的每行标签区域，并保存成图片
 int main()
 {
+    cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_ERROR);
     Logger::initialize();
-    Logger::set_level(Logger::LogLevel::Debug);
+    Logger::set_level(Logger::LogLevel::Info);
     Copier copier;
     copier.copy();
     std::cout<<"输入任意字符并回车退出..."<<std::endl;

@@ -27,6 +27,8 @@ import threadpool;
 
 using namespace indicators;
 
+
+
 /**
  * @brief 配置结构体
  * @param src_dir 源目录
@@ -409,106 +411,107 @@ class Task {
         const auto image_height = m_matStitch.rows;
         const auto max_length = std::max(image_width, image_height);
         auto m_row_rate = 0.25 * max_length / image_height;
-        auto m_col_rate = 0.25 * max_length / image_width;
 
         auto& location = m_param->location;
         auto& recoginze = m_param->recognize;
         int max_row_count{ 0 };
         int max_col_count{ 0 };
-        while (true) {
-            auto crop_width = static_cast<int>(image_width * m_col_rate + m_stepHorizontal);
-			crop_width = std::clamp(crop_width, 0, image_width);
-			auto crop_height = static_cast<int>(image_height * m_row_rate + m_stepVertical);
-			crop_height = std::clamp(crop_height, 0, image_height);
-            if (crop_width >= image_width) {
-                max_col_count++;
-            }
-            if (crop_height >= image_height) {
-                max_row_count++;
-            }
-            if (max_col_count > 1 || max_row_count > 1) {
-                break;
-            }
-			cv::Rect rect{ 0,0,crop_width, crop_height };
-			cv::Mat window = m_matStitch(rect);
-            std::vector<cv::Rect> boxes;
-            if (const auto ret = location.infer(window, boxes); !ret) {
-                m_row_rate *= 1.41421356;
-                m_col_rate *= 1.41421356;
-                continue;
-            }
-            if (boxes.empty()) {
-                m_row_rate *= 1.41421356;
-                m_col_rate *= 1.41421356;
-                continue;
-			}
-            const auto boxes_size = boxes.size();
-            std::vector<LabelCoordinates> lcs;
-            lcs.reserve(boxes_size);
-            for (const auto& box : boxes) {
-                auto cropped = window(box);
-                if (!cropped.isContinuous()) {
-                    cropped = cropped.clone();
-				}
-                QrCodeResult qr{};
-                if (const auto ret = recoginze.detect(cropped, qr); !ret) {
-                    Warn("{}", recoginze.what());
+        const std::vector<double> col_rates{0.33};
+        for (const auto& col_rate : col_rates) {
+            while (true) {
+                auto crop_width = static_cast<int>(image_width * col_rate + m_stepHorizontal);
+                crop_width = std::clamp(crop_width, 0, image_width);
+                auto crop_height = static_cast<int>(image_height * m_row_rate + m_stepVertical);
+                crop_height = std::clamp(crop_height, 0, image_height);
+                if (crop_width >= image_width) {
+                    max_col_count++;
+                }
+                if (crop_height >= image_height) {
+                    max_row_count++;
+                }
+                if (max_col_count > 1 || max_row_count > 1) {
+                    break;
+                }
+                cv::Rect rect{ 0,0,crop_width, crop_height };
+                cv::Mat window = m_matStitch(rect);
+                std::vector<cv::Rect> boxes;
+                if (const auto ret = location.infer(window, boxes); !ret) {
+                    m_row_rate *= 1.41421356;
                     continue;
                 }
-				LabelCoordinates lc{};
-                const auto is_ok = transformer_coordinates(box, qr, m_param->extractParam, m_dpi, crop_width, crop_height, lc);
-                if (!is_ok) {
+                if (boxes.empty()) {
+                    m_row_rate *= 1.41421356;
                     continue;
                 }
-                if (lc.label.x < 0 || lc.label.y < 0 || lc.label.x > crop_width || lc.label.y > crop_height) {
+                const auto boxes_size = boxes.size();
+                std::vector<LabelCoordinates> lcs;
+                lcs.reserve(boxes_size);
+                for (const auto& box : boxes) {
+                    auto cropped = window(box);
+                    if (!cropped.isContinuous()) {
+                        cropped = cropped.clone();
+                    }
+                    QrCodeResult qr{};
+                    if (const auto ret = recoginze.detect(cropped, qr); !ret) {
+                        Warn("{}", recoginze.what());
+                        continue;
+                    }
+                    LabelCoordinates lc{};
+                    const auto is_ok = transformer_coordinates(box, qr, m_param->extractParam, m_dpi, crop_width, crop_height, lc);
+                    if (!is_ok) {
+                        continue;
+                    }
+                    if (lc.label.x < 0 || lc.label.y < 0 || lc.label.x > crop_width || lc.label.y > crop_height) {
+                        continue;
+                    }
+                    lcs.emplace_back(std::move(lc));
+                }
+                if (lcs.empty()) {
+                    m_row_rate *= 1.41421356;
                     continue;
                 }
-				lcs.emplace_back(std::move(lc));
-            }
-            if (lcs.empty()) {
+                auto min_it = std::min_element(
+                    lcs.begin(), lcs.end(),
+                    [](const LabelCoordinates& a, const LabelCoordinates& b) {
+                        return a.euclidian_distance < b.euclidian_distance;
+                    }
+                );
+                if (min_it != lcs.end()) {
+                    for (const auto& item : lcs) {
+                        if (m_meanHeight == 0) {
+                            m_meanHeight = static_cast<int>((min_it->label.height + item.label.height) / 2.0 + 0.5);
+                        }
+                        else {
+                            m_meanHeight = static_cast<int>((m_meanHeight + static_cast<int>((min_it->label.height + item.label.height) / 2.0 + 0.5)) / 2.0 + 0.5);
+                        }
+                        if (m_meanWidth == 0) {
+                            m_meanWidth = static_cast<int>((min_it->label.width + item.label.width) / 2.0 + 0.5);
+                        }
+                        else {
+                            m_meanWidth = static_cast<int>((m_meanWidth + static_cast<int>((min_it->label.width + item.label.width) / 2.0 + 0.5)) / 2.0 + 0.5);
+                        }
+                        const auto distance = std::abs(min_it->label.y - item.label.y);
+                        if (distance > m_meanHeight * 0.8 && distance < m_meanHeight * 2) {
+                            m_labelFirstLineMin = *min_it;
+                            m_labelSecondLineAny = item;
+                            m_currentLc = m_labelFirstLineMin;
+                            m_previousLc = m_labelFirstLineMin;
+                            m_isFoundValidLabel = true;
+                            break;
+                        }
+                    }
+                }
+                if (m_isFoundValidLabel) {
+                    break;
+                }
+                if (crop_width >= image_width && crop_height >= image_height) {
+                    break;
+                }
                 m_row_rate *= 1.41421356;
-                m_col_rate *= 1.41421356;
-                continue;
-            }
-            auto min_it = std::min_element(
-                lcs.begin(), lcs.end(),
-                [](const LabelCoordinates& a, const LabelCoordinates& b) {
-                    return a.euclidian_distance < b.euclidian_distance;
-                }
-			);
-            if (min_it != lcs.end()) {
-                for (const auto& item : lcs) {
-                    if (m_meanHeight == 0) {
-						m_meanHeight = static_cast<int>((min_it->label.height + item.label.height) / 2.0 + 0.5);
-                    }
-                    else {
-						m_meanHeight = static_cast<int>((m_meanHeight + static_cast<int>((min_it->label.height + item.label.height) / 2.0 + 0.5)) / 2.0 + 0.5);
-                    }
-                    if (m_meanWidth == 0) {
-                        m_meanWidth = static_cast<int>((min_it->label.width + item.label.width) / 2.0 + 0.5);
-                    }
-                    else {
-                        m_meanWidth = static_cast<int>((m_meanWidth + static_cast<int>((min_it->label.width + item.label.width) / 2.0 + 0.5)) / 2.0 + 0.5);
-                    }
-					const auto distance = std::abs(min_it->label.y - item.label.y);
-                    if (distance > m_meanHeight * 0.8 && distance < m_meanHeight * 2) {
-                        m_labelFirstLineMin = *min_it;
-                        m_labelSecondLineAny = item;
-                        m_currentLc = m_labelFirstLineMin;
-                        m_previousLc = m_labelFirstLineMin;
-                        m_isFoundValidLabel = true;
-                        break;
-					}
-                }
             }
             if (m_isFoundValidLabel) {
                 break;
             }
-            if (crop_width >= image_width && crop_height >= image_height) {
-                break;
-            }
-            m_row_rate *= 1.41421356;
-            m_col_rate *= 1.41421356;
         }
     }
 
@@ -705,13 +708,14 @@ public:
         const auto& src_path = m_param->srcPath;
 		const auto& file_names = m_param->fileNames;
         const auto& is_first = m_param->isFirst;
+        int valid_first_index{ 0 };
         do {
 			// 初始化滑动区域参数
             SlideArea sa{};
 			const auto src_abs_path = src_path / file_names[file_idx];
             const auto mat_src = cv::imread(src_abs_path.string());
             // 读取图片并拼接
-            if (file_idx == 0 ) {
+            if (file_idx <= valid_first_index ) {
                 m_matStitch = mat_src;
             }
             else {
@@ -720,6 +724,7 @@ public:
             // 查找合适的标签以及标签参数
             find_qualified_labels();
             if (!m_isFoundValidLabel) {
+                valid_first_index = file_idx;
                 Warn("在图片[ {} ]中没有找到合适的标签，跳过该图片的裁剪操作!", src_abs_path.string());
                 continue;
             }
@@ -877,7 +882,6 @@ void Copier::copy()
         for (auto& result : results) {
             result.get();
         }
-        //bar.set_option(option::PostfixText{ std::format("{}({})/{}",actual_count.load(std::memory_order_relaxed),actual_split_count.load(std::memory_order_relaxed), count)});
         bar.mark_as_completed();
         {
             const auto msg = std::format("汇总: 应拷贝数量: {}, 实际拷贝数量: {}, 实际拆分拷贝数量: {}", 
