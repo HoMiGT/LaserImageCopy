@@ -29,6 +29,10 @@ set(CUDA_INCLUDE_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/i
 set(CUDA_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/lib/x64")
 file(GLOB CUDA_LIBS "${CUDA_DIR}/*.lib")
 
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core)
+find_package(ICU REQUIRED COMPONENTS i18n uc)
+
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 set(OpenCV_ROOT "${VCPKG_INSTALLED_DIR}/share/opencv4")
@@ -53,7 +57,7 @@ set(PROJECT_SOURCES
 	main.cpp
 )
 
-add_executable(${PROJECT_NAME} ${PROJECT_SOURCES} "threadpool.cppm")
+add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
 
 target_sources(${PROJECT_NAME} PRIVATE
 		FILE_SET cxx_modules
@@ -64,6 +68,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 		    copier.cppm
 			detector.cppm
 			threadpool.cppm
+			translate.cppm
 )
 target_include_directories(${PROJECT_NAME} PRIVATE
 		${CMAKE_CURRENT_SOURCE_DIR}
@@ -81,6 +86,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 		${ZBAR_LIBRARIES}
 		${TensorRT_LIBS}
 		${CUDA_LIBS}
+		Qt${QT_VERSION_MAJOR}::Core
+		ICU::i18n ICU::uc
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE

@@ -24,6 +24,7 @@ export module copier;
 import logger;
 import detecter;
 import threadpool;
+import translate;
 
 using namespace indicators;
 
@@ -190,9 +191,11 @@ private:
     size_t m_threadCount{0};
     CopyDirInfo m_copyFileInfo;
     bool is_ok{ false };
+    std::unordered_map<std::string, std::string> m_extract_pinyin;
     std::unordered_map<std::string, ExtractParam> m_extract_params;
     void collect_files();
     auto load_extract_params(std::string_view label_name)->bool;
+    auto load_extract_pinyin()->bool;
 };
 
 struct TaskParam {
@@ -796,6 +799,12 @@ void Copier::copy()
         Info("{}", msg);
         return;
 	}
+    if (const auto ret = load_extract_pinyin(); !ret) {
+		const auto msg = "加载提取参数失败，无法进行拷贝操作!";
+        std::cout << msg << std::endl;
+        Info("{}", msg);
+		return;
+    }
     collect_files();
     {
         const auto msg = std::format("拷贝的任务总数: {}\n拷贝文件的数量: {}\n拷贝目录的源文件根目录: {}\n拷贝目录的目标文件根目录: {}\n",
@@ -890,7 +899,7 @@ void Copier::copy()
             Info("{}", msg);
         }
         // 测试先注释掉重命名操作
-        // std::filesystem::rename(src_last_dir,src_last_rename_dir);
+         std::filesystem::rename(src_last_dir,src_last_rename_dir);
         {
             const auto time_str = std::format("{:%Y-%m-%d %H:%M:%S}", std::chrono::system_clock::now());
             const auto msg = std::format("拷贝结束时间: {}\n文件拷贝完成, 并重命名源目录: {}\n<============== [ Task-{}( {} ) 拷贝完成! ] ==============>", 
@@ -975,13 +984,32 @@ void Copier::collect_files()
 }
 
 
+auto Copier::load_extract_pinyin() -> bool {
+    bool flag{ false };
+    for (const auto& config_entry : std::filesystem::directory_iterator(m_config.extract_config_dir)) {
+        if (!config_entry.is_regular_file()) continue;
+		const std::string file_name = config_entry.path().stem().string();
+        const std::string pinyin_file_name = qStringToPinYin(QString::fromStdString(file_name));
+		m_extract_pinyin[pinyin_file_name] = file_name;
+        flag = true;
+    }
+    return flag;
+}
+
+
 auto Copier::load_extract_params(const std::string_view label_name)->bool
 {
     if (auto it = m_extract_params.find(label_name.data()); it != m_extract_params.end()) {
         return true;
     }
     std::filesystem::path extract_config_path(m_config.extract_config_dir);
-    extract_config_path /= std::format("{}.json", label_name.data());
+    try { 
+        extract_config_path /= std::format("{}.json", m_extract_pinyin[label_name.data()]); 
+    }
+    catch (std::exception& e) {
+		Warn("文件夹拼音名称: {} 对应的标签配置未找到: {}", label_name, e.what());
+        return false;
+    }
 
     if (!std::filesystem::exists(extract_config_path)) {
         Warn("文件路径: {} 未找到!", extract_config_path.string());
