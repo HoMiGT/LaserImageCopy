@@ -18,6 +18,7 @@ module;
 #include <indicators/cursor_control.hpp>
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
+#include <QString>
 
 export module copier;
 
@@ -37,6 +38,7 @@ using namespace indicators;
  * @param open_crop 是否开启裁剪
  * @param model 模型路径
  * @param extract_config_dir 提取配置目录
+ * @param concurrency_number 并发数量
  */
 struct Config
 {
@@ -45,6 +47,7 @@ struct Config
     bool open_crop{false};
     std::string model;
     std::string extract_config_dir;
+	int concurrency_number{ 1 };
 };
 
 /**
@@ -106,6 +109,13 @@ static Config load_config(const std::string_view path = "./config.json")
 		const auto msg = std::string("Missing or incorrect fields in configuration: extractConfigDir");
         Error("{}", msg);
         return config;
+    }
+	if (j.contains("concurrencyNumber") && j["concurrencyNumber"].is_number_integer())
+    {
+		config.concurrency_number = j["concurrencyNumber"].get<int>();
+    }
+    else {
+		config.concurrency_number = 1;
     }
     return config;
 }
@@ -704,7 +714,8 @@ public:
     ~Task() = default;
 
     void run(BlockProgressBar& bar, int subtask_index, const int task_index, const std::string& setting_name,
-        std::atomic<int>& actual_count, std::atomic<int>& actual_split_count, const int total){
+        std::atomic<int>& actual_count, std::atomic<int>& actual_split_count,std::atomic<int>& bad_count, 
+        const int total){
         Info("Task-{}( {} )_Part-{} start to execute...", task_index, setting_name, subtask_index);
         int file_idx{ 0 };
 		bool is_found_valid_params{ false };
@@ -727,7 +738,8 @@ public:
             // 查找合适的标签以及标签参数
             find_qualified_labels();
             if (!m_isFoundValidLabel) {
-                valid_first_index = file_idx;
+                valid_first_index = file_idx+1;
+                bad_count.fetch_add(1);
                 Warn("在图片[ {} ]中没有找到合适的标签，跳过该图片的裁剪操作!", src_abs_path.string());
                 continue;
             }
@@ -743,7 +755,14 @@ public:
                 continue;
             }
             actual_count.fetch_add(1);
-            bar.set_option(option::PostfixText{ std::format("{}({})/{}",actual_count.load(std::memory_order_relaxed),actual_split_count.load(std::memory_order_relaxed), total) });
+			// 更新进度条
+			const auto bar_count = total - bad_count.load(std::memory_order_relaxed);
+            bar.set_option(option::MaxProgress{ bar_count });
+            bar.set_option(option::PostfixText{ std::format("{}({})/{}, S:{}",
+                actual_count.load(std::memory_order_relaxed),
+                actual_split_count.load(std::memory_order_relaxed), 
+                bar_count,
+                total)});
             bar.tick();
         } while (++file_idx < m_saveCount);
         Info("Task-{}( {} )_Part-{} finished. Should save count: {}, Actual save count: {}, Actual save split count: {}", 
@@ -760,8 +779,7 @@ Copier::Copier()
 		Error("配置文件没有加载成功！");
         return;
     }
-    m_threadCount = std::thread::hardware_concurrency();
-    m_threadCount = 2;
+    m_threadCount = m_config.concurrency_number;
     m_copyFileInfo.src_root = std::filesystem::path(m_config.src_dir);
     m_copyFileInfo.dst_root = std::filesystem::path(m_config.dst_dir);
     is_ok = true;
@@ -835,6 +853,10 @@ void Copier::copy()
             Warn("{}", msg);
             continue;
         }
+        if (!std::filesystem::exists(dst_last_dir))
+        {
+			std::filesystem::create_directories(dst_last_dir);
+        }
         {
             const auto msg = std::format("<============== [ Task-{}( {} ) 开始拷贝... ] ==============>\n标签名称: {}, 文件数量: {}\n源目录: {}\n目标目录: {}",
                 task_index, label_name, label_name, count, src_last_dir.string(), dst_last_dir.string());
@@ -861,6 +883,7 @@ void Copier::copy()
         const auto split_file_names =  split_with_overlap(file_names, m_threadCount);
         std::vector<std::future<void>> results;
         results.reserve(m_threadCount);
+        std::atomic<int> bad_count{ 0 };
         std::atomic<int> actual_count{ 0 };
         std::atomic<int> actual_split_count{ 0 };
         for (auto i{ 0 }; i < m_threadCount; ++i) {
@@ -874,17 +897,18 @@ void Copier::copy()
             const auto temp_model = m_config.model;
             results.emplace_back(pool.submit(
                 [temp_file_names = std::move(temp_file_names),
-                 &bar,  temp_subtask_index,
+                 &bar, temp_subtask_index,
                 temp_src_last_dir, temp_src_rename_dir, temp_dst_last_dir,
                 temp_extract_params, temp_label_name, temp_model, task_index,
-                &actual_count,&actual_split_count,temp_total = count]() mutable {
+                &actual_count, &actual_split_count, &bad_count, temp_total = count]() mutable {
                     const auto& t1 = temp_file_names;
                     const auto flag = temp_subtask_index == 0 ? true : false;
                     auto tkp = std::make_unique<TaskParam>(
                         temp_src_last_dir, temp_src_rename_dir, temp_dst_last_dir, std::move(temp_file_names),
                         temp_extract_params, flag, temp_model);
                     Task tk{ std::move(tkp) };
-                    tk.run(bar, temp_subtask_index, task_index, temp_label_name,actual_count,actual_split_count, temp_total);
+                    tk.run(bar, temp_subtask_index, task_index, temp_label_name,
+                        actual_count,actual_split_count, bad_count, temp_total);
                 }
             ));
         }
@@ -893,8 +917,9 @@ void Copier::copy()
         }
         bar.mark_as_completed();
         {
-            const auto msg = std::format("汇总: 应拷贝数量: {}, 实际拷贝数量: {}, 实际拆分拷贝数量: {}", 
-                count, actual_count.load(std::memory_order_relaxed), actual_split_count.load(std::memory_order_relaxed));
+            const auto msg = std::format("汇总: 应拷贝数量: {}, 实际拷贝数量: {}, 错误图片数量: {}, 实际拆分拷贝数量: {}", 
+                count, actual_count.load(std::memory_order_relaxed), bad_count.load(std::memory_order_relaxed),
+                actual_split_count.load(std::memory_order_relaxed));
             std::cout << msg << std::endl;
             Info("{}", msg);
         }
@@ -977,7 +1002,8 @@ void Copier::collect_files()
             const std::filesystem::path src_last_rename_dir = m_copyFileInfo.src_root / date_dir_name / label_dir_rename;
             const std::filesystem::path dst_last_dir = m_copyFileInfo.dst_root / date_dir_name / label_dir_name;
             sort_files(file_names);
-            m_copyFileInfo.dir_files.emplace_back(DirFiles{count,label_name,src_last_dir,src_last_rename_dir, dst_last_dir,std::move(file_names)});
+            m_copyFileInfo.dir_files.emplace_back(DirFiles{count,label_name,src_last_dir,src_last_rename_dir, 
+                dst_last_dir,std::move(file_names)});
         }
     }
     m_copyFileInfo.count = sum;

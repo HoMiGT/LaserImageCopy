@@ -3,5 +3,6 @@
   "dstDir": "D:\\test\\copy\\dst",
   "openCrop": false,
   "model": "best.engine",
-  "extractConfigDir": "D:\\test\\extrat_config"
+  "extractConfigDir": "D:\\test\\extrat_config",
+  "concurrencyNumber": 2
 }
