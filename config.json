@@ -1,6 +1,6 @@
 {
-  "srcDir": "D:\\test\\copy\\src",
-  "dstDir": "D:\\test\\copy\\dst",
+  "srcDir": [ "D:\\test\\copy\\src", "D:\\test\\copy2\\src" ],
+  "dstDir": [ "D:\\test\\copy\\dst", "D:\\test\\copy2\\dst" ],
   "openCrop": false,
   "model": "best.engine",
   "extractConfigDir": "D:\\test\\extrat_config",

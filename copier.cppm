@@ -42,8 +42,8 @@ using namespace indicators;
  */
 struct Config
 {
-    std::string src_dir;
-    std::string dst_dir;
+    std::vector<std::string> src_dir;
+    std::vector<std::string> dst_dir;
     bool open_crop{false};
     std::string model;
     std::string extract_config_dir;
@@ -66,9 +66,9 @@ static Config load_config(const std::string_view path = "./config.json")
     }
     nlohmann::json j;
     ifs >> j;
-    if (j.contains("srcDir") && j["srcDir"].is_string())
+    if (j.contains("srcDir") && j["srcDir"].is_array())
     {
-        config.src_dir = j["srcDir"].get<std::string>();
+        config.src_dir = j["srcDir"].get<std::vector<std::string>>();
     }else
     {
         const auto msg = std::string("Missing or incorrect fields in configuration: src_dir");
@@ -76,9 +76,9 @@ static Config load_config(const std::string_view path = "./config.json")
         return config;
     }
 
-    if (j.contains("dstDir")&&j["dstDir"].is_string())
+    if (j.contains("dstDir")&&j["dstDir"].is_array())
     {
-        config.dst_dir = j["dstDir"].get<std::string>();
+        config.dst_dir = j["dstDir"].get<std::vector<std::string>>();
     }else
     {
         const auto msg = std::string("Missing or incorrect fields in configuration: dst_dir");
@@ -199,7 +199,7 @@ public:
 private:
     Config m_config{};
     size_t m_threadCount{0};
-    CopyDirInfo m_copyFileInfo;
+    std::vector<CopyDirInfo> m_copyFileInfos;
     bool is_ok{ false };
     std::unordered_map<std::string, std::string> m_extract_pinyin;
     std::unordered_map<std::string, ExtractParam> m_extract_params;
@@ -780,8 +780,18 @@ Copier::Copier()
         return;
     }
     m_threadCount = m_config.concurrency_number;
-    m_copyFileInfo.src_root = std::filesystem::path(m_config.src_dir);
-    m_copyFileInfo.dst_root = std::filesystem::path(m_config.dst_dir);
+    if (m_config.src_dir.size() != m_config.dst_dir.size()) {
+		Error("源目录和目标目录配置错误，长度不一致！");
+        return;
+    }
+	const auto config_size = m_config.src_dir.size();
+	m_copyFileInfos.reserve(config_size);
+	for (auto i{ 0 }; i < config_size; ++i) {
+        CopyDirInfo info;
+        info.src_root = std::filesystem::path(m_config.src_dir[i]);
+        info.dst_root = std::filesystem::path(m_config.dst_dir[i]);
+        m_copyFileInfos.emplace_back(std::move(info));
+    }
     is_ok = true;
 }
 
@@ -824,14 +834,23 @@ void Copier::copy()
 		return;
     }
     collect_files();
+    auto task_count = 0;
+    auto copy_count = 0;
     {
+        std::stringstream ss_src;
+        std::stringstream ss_dst;
+        for (const auto& info : m_copyFileInfos) {
+            task_count += info.dir_files.size();
+			copy_count += info.count;
+            ss_src << info.src_root.string() << "; ";
+			ss_dst << info.dst_root.string() << "; ";
+        }
         const auto msg = std::format("拷贝的任务总数: {}\n拷贝文件的数量: {}\n拷贝目录的源文件根目录: {}\n拷贝目录的目标文件根目录: {}\n",
-            m_copyFileInfo.dir_files.size(), m_copyFileInfo.count, m_copyFileInfo.src_root.string(), m_copyFileInfo.dst_root.string());
+            task_count, copy_count, ss_src.str(), ss_dst.str());
         std::cout << msg << std::endl;
         Info("{}", msg);
-
     }
-    if (m_copyFileInfo.dir_files.empty())
+    if (task_count==0 || copy_count == 0)
     {
         const auto msg = "没有要拷贝的图片数据!";
         std::cout << msg << std::endl;
@@ -844,96 +863,100 @@ void Copier::copy()
     std::cout<< std::endl << std::endl;
     int task_index{1};
     show_console_cursor(false);
-    for (const auto& [count, label_name, src_last_dir,
-        src_last_rename_dir, dst_last_dir, file_names]: m_copyFileInfo.dir_files)
-    {
-        if (!load_extract_params(label_name)) {
-            const auto msg = std::format("加载标签[ {} ]的配置失败!", label_name);
-            std::cerr << msg << std::endl;
-            Warn("{}", msg);
-            continue;
-        }
-        if (!std::filesystem::exists(dst_last_dir))
+
+    for (const auto& copy_file_info : m_copyFileInfos) {
+        for (const auto& [count, label_name, src_last_dir,
+            src_last_rename_dir, dst_last_dir, file_names] : copy_file_info.dir_files)
         {
-			std::filesystem::create_directories(dst_last_dir);
+            if (!load_extract_params(label_name)) {
+                const auto msg = std::format("加载标签[ {} ]的配置失败!", label_name);
+                std::cerr << msg << std::endl;
+                Warn("{}", msg);
+                continue;
+            }
+            if (!std::filesystem::exists(dst_last_dir))
+            {
+                std::filesystem::create_directories(dst_last_dir);
+            }
+            {
+                const auto msg = std::format("<============== [ Task-{}( {} ) 开始拷贝... ] ==============>\n标签名称: {}, 文件数量: {}\n源目录: {}\n目标目录: {}",
+                    task_index, label_name, label_name, count, src_last_dir.string(), dst_last_dir.string());
+                std::cout << msg << std::endl;
+                Info("{}", msg);
+            }
+            int index{ 0 };
+            const auto now = std::chrono::system_clock::now();
+            const auto now_str = std::format("{:%Y-%m-%d %H:%M:%S}", now);
+            {
+                const auto msg = std::format("拷贝开始时间: {}", now_str);
+                std::cout << msg << std::endl;
+                Info("{}", msg);
+            }
+            BlockProgressBar bar{
+                option::BarWidth{80},
+                option::ForegroundColor{Color::green},
+                option::ShowPercentage{true},
+                option::ShowElapsedTime{true},
+                option::FontStyles{std::vector{FontStyle::bold}},
+                option::MaxProgress{count}
+            };
+            bar.set_option(option::PostfixText{ std::format("{}/{}",0, count) });
+            const auto split_file_names = split_with_overlap(file_names, m_threadCount);
+            std::vector<std::future<void>> results;
+            results.reserve(m_threadCount);
+            std::atomic<int> bad_count{ 0 };
+            std::atomic<int> actual_count{ 0 };
+            std::atomic<int> actual_split_count{ 0 };
+            for (auto i{ 0 }; i < m_threadCount; ++i) {
+                std::vector<std::string> temp_file_names = split_file_names[i];
+                const auto temp_subtask_index = i;
+                const auto temp_src_last_dir = src_last_dir;
+                const auto temp_src_rename_dir = src_last_rename_dir;
+                const auto temp_dst_last_dir = dst_last_dir;
+                const auto temp_extract_params = m_extract_params[label_name];
+                const auto temp_label_name = label_name;
+                const auto temp_model = m_config.model;
+                results.emplace_back(pool.submit(
+                    [temp_file_names = std::move(temp_file_names),
+                    &bar, temp_subtask_index,
+                    temp_src_last_dir, temp_src_rename_dir, temp_dst_last_dir,
+                    temp_extract_params, temp_label_name, temp_model, task_index,
+                    &actual_count, &actual_split_count, &bad_count, temp_total = count]() mutable {
+                        const auto& t1 = temp_file_names;
+                        const auto flag = temp_subtask_index == 0 ? true : false;
+                        auto tkp = std::make_unique<TaskParam>(
+                            temp_src_last_dir, temp_src_rename_dir, temp_dst_last_dir, std::move(temp_file_names),
+                            temp_extract_params, flag, temp_model);
+                        Task tk{ std::move(tkp) };
+                        tk.run(bar, temp_subtask_index, task_index, temp_label_name,
+                            actual_count, actual_split_count, bad_count, temp_total);
+                    }
+                ));
+            }
+            for (auto& result : results) {
+                result.get();
+            }
+            bar.mark_as_completed();
+            {
+                const auto msg = std::format("汇总: 应拷贝数量: {}, 实际拷贝数量: {}, 错误图片数量: {}, 实际拆分拷贝数量: {}",
+                    count, actual_count.load(std::memory_order_relaxed), bad_count.load(std::memory_order_relaxed),
+                    actual_split_count.load(std::memory_order_relaxed));
+                std::cout << msg << std::endl;
+                Info("{}", msg);
+            }
+            // 测试先注释掉重命名操作
+            std::filesystem::rename(src_last_dir, src_last_rename_dir);
+            {
+                const auto time_str = std::format("{:%Y-%m-%d %H:%M:%S}", std::chrono::system_clock::now());
+                const auto msg = std::format("拷贝结束时间: {}\n文件拷贝完成, 并重命名源目录: {}\n<============== [ Task-{}( {} ) 拷贝完成! ] ==============>",
+                    time_str, src_last_rename_dir.string(), task_index++, label_name);
+                std::cout << msg << std::endl;
+                Info("{}", msg);
+            }
+            std::cout << std::endl << std::endl;
         }
-        {
-            const auto msg = std::format("<============== [ Task-{}( {} ) 开始拷贝... ] ==============>\n标签名称: {}, 文件数量: {}\n源目录: {}\n目标目录: {}",
-                task_index, label_name, label_name, count, src_last_dir.string(), dst_last_dir.string());
-            std::cout << msg << std::endl;
-            Info("{}", msg);
-        }
-        int index{0};
-        const auto now = std::chrono::system_clock::now();
-        const auto now_str = std::format("{:%Y-%m-%d %H:%M:%S}", now);
-        {
-            const auto msg = std::format("拷贝开始时间: {}", now_str);
-            std::cout << msg << std::endl;
-            Info("{}", msg);
-        }
-        BlockProgressBar bar{
-            option::BarWidth{80},
-            option::ForegroundColor{Color::green},
-            option::ShowPercentage{true},
-            option::ShowElapsedTime{true},
-            option::FontStyles{std::vector{FontStyle::bold}},
-            option::MaxProgress{count}
-        };
-        bar.set_option(option::PostfixText{ std::format("{}/{}",0, count) });
-        const auto split_file_names =  split_with_overlap(file_names, m_threadCount);
-        std::vector<std::future<void>> results;
-        results.reserve(m_threadCount);
-        std::atomic<int> bad_count{ 0 };
-        std::atomic<int> actual_count{ 0 };
-        std::atomic<int> actual_split_count{ 0 };
-        for (auto i{ 0 }; i < m_threadCount; ++i) {
-            std::vector<std::string> temp_file_names = split_file_names[i];
-            const auto temp_subtask_index = i;
-            const auto temp_src_last_dir = src_last_dir;
-            const auto temp_src_rename_dir = src_last_rename_dir;
-            const auto temp_dst_last_dir = dst_last_dir;
-            const auto temp_extract_params = m_extract_params[label_name];
-            const auto temp_label_name = label_name;
-            const auto temp_model = m_config.model;
-            results.emplace_back(pool.submit(
-                [temp_file_names = std::move(temp_file_names),
-                 &bar, temp_subtask_index,
-                temp_src_last_dir, temp_src_rename_dir, temp_dst_last_dir,
-                temp_extract_params, temp_label_name, temp_model, task_index,
-                &actual_count, &actual_split_count, &bad_count, temp_total = count]() mutable {
-                    const auto& t1 = temp_file_names;
-                    const auto flag = temp_subtask_index == 0 ? true : false;
-                    auto tkp = std::make_unique<TaskParam>(
-                        temp_src_last_dir, temp_src_rename_dir, temp_dst_last_dir, std::move(temp_file_names),
-                        temp_extract_params, flag, temp_model);
-                    Task tk{ std::move(tkp) };
-                    tk.run(bar, temp_subtask_index, task_index, temp_label_name,
-                        actual_count,actual_split_count, bad_count, temp_total);
-                }
-            ));
-        }
-        for (auto& result : results) {
-            result.get();
-        }
-        bar.mark_as_completed();
-        {
-            const auto msg = std::format("汇总: 应拷贝数量: {}, 实际拷贝数量: {}, 错误图片数量: {}, 实际拆分拷贝数量: {}", 
-                count, actual_count.load(std::memory_order_relaxed), bad_count.load(std::memory_order_relaxed),
-                actual_split_count.load(std::memory_order_relaxed));
-            std::cout << msg << std::endl;
-            Info("{}", msg);
-        }
-        // 测试先注释掉重命名操作
-         std::filesystem::rename(src_last_dir,src_last_rename_dir);
-        {
-            const auto time_str = std::format("{:%Y-%m-%d %H:%M:%S}", std::chrono::system_clock::now());
-            const auto msg = std::format("拷贝结束时间: {}\n文件拷贝完成, 并重命名源目录: {}\n<============== [ Task-{}( {} ) 拷贝完成! ] ==============>", 
-                time_str, src_last_rename_dir.string(), task_index++, label_name);
-            std::cout << msg << std::endl;
-            Info("{}", msg);
-        }
-        std::cout<< std::endl << std::endl;
     }
+    
     show_console_cursor(true);
     {
         const auto msg = "所有文件拷贝完成!";
@@ -970,43 +993,45 @@ static void sort_files(std::vector<std::string>& files)
 
 void Copier::collect_files()
 {
-    int sum{0};
-    for (const auto& date_entry: std::filesystem::directory_iterator(m_copyFileInfo.src_root))
-    {
-        if (!date_entry.is_directory()) continue;
-        const std::string date_dir_name = date_entry.path().filename().string();
-        for (const auto& label_entry: std::filesystem::directory_iterator(date_entry))
+    for (auto& copy_file_info : m_copyFileInfos) {
+        int sum{ 0 };
+        for (const auto& date_entry : std::filesystem::directory_iterator(copy_file_info.src_root))
         {
-            if (!label_entry.is_directory()) continue;
-            if (label_entry.path().filename().string().ends_with("_copied")) continue;
-            const std::string label_dir_name = label_entry.path().filename().string();
-            std::string label_name;
-            const auto find = label_dir_name.rfind('_');
-            if (find != std::string::npos) {
-                label_name = label_dir_name.substr(0, find);
-            }
-            else {
-                label_name = label_dir_name;
-            }
-            const std::string label_dir_rename = std::format("{}_copied",label_dir_name);
-            int count{0};
-            std::vector<std::string> file_names;
-            for (const auto& file_entry: std::filesystem::directory_iterator(label_entry))
+            if (!date_entry.is_directory()) continue;
+            const std::string date_dir_name = date_entry.path().filename().string();
+            for (const auto& label_entry : std::filesystem::directory_iterator(date_entry))
             {
-                if (!file_entry.is_regular_file()) continue;
-                file_names.emplace_back(file_entry.path().filename().string());
-                ++count;
+                if (!label_entry.is_directory()) continue;
+                if (label_entry.path().filename().string().ends_with("_copied")) continue;
+                const std::string label_dir_name = label_entry.path().filename().string();
+                std::string label_name;
+                const auto find = label_dir_name.rfind('_');
+                if (find != std::string::npos) {
+                    label_name = label_dir_name.substr(0, find);
+                }
+                else {
+                    label_name = label_dir_name;
+                }
+                const std::string label_dir_rename = std::format("{}_copied", label_dir_name);
+                int count{ 0 };
+                std::vector<std::string> file_names;
+                for (const auto& file_entry : std::filesystem::directory_iterator(label_entry))
+                {
+                    if (!file_entry.is_regular_file()) continue;
+                    file_names.emplace_back(file_entry.path().filename().string());
+                    ++count;
+                }
+                sum += count;
+                const std::filesystem::path src_last_dir = copy_file_info.src_root / date_dir_name / label_dir_name;
+                const std::filesystem::path src_last_rename_dir = copy_file_info.src_root / date_dir_name / label_dir_rename;
+                const std::filesystem::path dst_last_dir = copy_file_info.dst_root / date_dir_name / label_dir_name;
+                sort_files(file_names);
+                copy_file_info.dir_files.emplace_back(DirFiles{ count,label_name,src_last_dir,src_last_rename_dir,
+                    dst_last_dir,std::move(file_names) });
             }
-            sum += count;
-            const std::filesystem::path src_last_dir = m_copyFileInfo.src_root / date_dir_name / label_dir_name;
-            const std::filesystem::path src_last_rename_dir = m_copyFileInfo.src_root / date_dir_name / label_dir_rename;
-            const std::filesystem::path dst_last_dir = m_copyFileInfo.dst_root / date_dir_name / label_dir_name;
-            sort_files(file_names);
-            m_copyFileInfo.dir_files.emplace_back(DirFiles{count,label_name,src_last_dir,src_last_rename_dir, 
-                dst_last_dir,std::move(file_names)});
         }
+        copy_file_info.count = sum;
     }
-    m_copyFileInfo.count = sum;
 }
 
 
