@@ -451,7 +451,6 @@ class Task {
 					m_row_rate *= 1.41421356;
 					continue;
                 }
-                cv::imwrite("window.png",window);
                 std::vector<cv::Rect> boxes;
                 if (const auto ret = location.infer(window, boxes); !ret) {
                     m_row_rate *= 1.41421356;
@@ -469,7 +468,6 @@ class Task {
                     if (cropped.empty()) {
                         continue;
                     }
-                    cv::imwrite("cropped.png", cropped);
                     if (!cropped.isContinuous()) {
                         cropped = cropped.clone();
                     }
@@ -770,14 +768,6 @@ public:
                 else {
                     cv::vconcat(m_matEnd, mat_src, m_matStitch);
                 }
-            }
-            if (file_names[file_idx] == "Grab_000032.jpg") {
-                if ( !m_matEnd.empty() ) {
-                    cv::imwrite("debug_end.jpg", m_matEnd);
-				}
-				cv::imwrite("debug_src.jpg", mat_src);
-				cv::imwrite("debug_stitch.jpg", m_matStitch);
-                auto temp = 1;
             }
             // 查找合适的标签以及标签参数
             find_qualified_labels();
