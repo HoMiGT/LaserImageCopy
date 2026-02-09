@@ -216,7 +216,7 @@ struct TaskParam {
 	ExtractParam extractParam;
 	bool isFirst{ true };
 	Recognize recognize;
-    Location location;
+    Location<float> location;
     bool isInitialize{ false };
     explicit TaskParam(const std::filesystem::path& src_path,
         const std::filesystem::path& src_rename_path,
@@ -447,6 +447,11 @@ class Task {
                 }
                 cv::Rect rect{ 0,0,crop_width, crop_height };
                 cv::Mat window = m_matStitch(rect);
+                if (window.empty()) {
+					m_row_rate *= 1.41421356;
+					continue;
+                }
+                cv::imwrite("window.png",window);
                 std::vector<cv::Rect> boxes;
                 if (const auto ret = location.infer(window, boxes); !ret) {
                     m_row_rate *= 1.41421356;
@@ -461,6 +466,10 @@ class Task {
                 lcs.reserve(boxes_size);
                 for (const auto& box : boxes) {
                     auto cropped = window(box);
+                    if (cropped.empty()) {
+                        continue;
+                    }
+                    cv::imwrite("cropped.png", cropped);
                     if (!cropped.isContinuous()) {
                         cropped = cropped.clone();
                     }
@@ -552,8 +561,15 @@ class Task {
             if (m_param->isFirst && idx == 0 && slide_idx == 0) {
                 // 仅文件夹第一个文件保存
                 const auto offset = static_cast<int>(m_lineSapce / 2.0 + 0.5);
-                const auto cut_start = m_currentLc.label.y - offset;
-                const auto cut_end = m_currentLc.label.y + m_currentLc.label.height + offset;
+                auto cut_start = m_currentLc.label.y - offset;
+                auto cut_end = m_currentLc.label.y + m_currentLc.label.height + offset;
+                cut_start = std::clamp(cut_start, 0, image_height);
+                cut_end = std::clamp(cut_end, 0, image_height);
+                if (cut_start >= cut_end) {
+                    Warn("请核查, 该图无法正确检测合格标签: {}", dst_abs_path.string());
+                    is_invalid_image = true;
+                    break;
+                }
                 const auto save_mat = m_matStitch.rowRange(cut_start, cut_end);
                 const auto save_abs_path = (dst_last_dir / std::format("{}_P0{}", file_stem, file_ext)).string();
                 cv::imwrite(save_abs_path, save_mat);
@@ -600,6 +616,11 @@ class Task {
                 // 截取图片
                 cv::Rect slide_win{ sx,sy,sw,sh };
                 cv::Mat slide_mat = m_matStitch(slide_win);
+                if (slide_mat.empty()) {
+                    sa.ex += m_meanWidth * 0.618;
+                    sa.ey += m_meanWidth * 0.618;
+                    continue;
+                }
                 // 进行推理检测并调整位置
                 std::vector<cv::Rect> boxes;
                 if (const auto ret = location.infer(slide_mat, boxes); !ret) {
@@ -617,6 +638,9 @@ class Task {
                 QrCodeResult qr{};
                 for (const auto& box : boxes) {
                     auto cropped = slide_mat(box);
+                    if (cropped.empty()) {
+                        continue;
+                    }
                     if (!cropped.isContinuous())
                         cropped = cropped.clone();
                     if (const auto ret = recognize.detect(cropped, qr); !ret) {
@@ -678,14 +702,17 @@ class Task {
                 }
                 sa.sx = static_cast<int>(m_currentLc.label.x - m_meanWidth * 0.25 + 0.5);
                 sa.ex = static_cast<int>(m_currentLc.label.x + m_meanWidth * 1.25 + 0.5);
-                sa.sy += static_cast<int>(m_lineSapce / 2.0 + 0.5) * 2 + m_meanHeight;
-                sa.ey += static_cast<int>(m_lineSapce / 2.0 + 0.5) * 2 + m_meanHeight;
+                sa.sy = cut_start + static_cast<int>(m_lineSapce / 2.0 + 0.5) * 2 + m_meanHeight;
+                sa.ey = cut_end + static_cast<int>(m_lineSapce / 2.0 + 0.5) * 2 + m_meanHeight;
                 m_previousLc = m_currentLc;
                 // 更新图片末尾
                 if (sa.sy > image_height) {
                     break;
                 }
                 if (sa.ey > image_height) {
+                    if (cut_end >= image_height) {
+                        break;
+                    }
                     m_matEnd = m_matStitch.rowRange(cut_end, image_height);
                     break;
                 }
@@ -716,6 +743,10 @@ public:
     void run(BlockProgressBar& bar, int subtask_index, const int task_index, const std::string& setting_name,
         std::atomic<int>& actual_count, std::atomic<int>& actual_split_count,std::atomic<int>& bad_count, 
         const int total){
+		if (!m_param->isInitialize) {
+            Error("Task-{}( {} )_Part-{} initialization failed, skip the task!", task_index, setting_name, subtask_index);
+            return;
+        }
         Info("Task-{}( {} )_Part-{} start to execute...", task_index, setting_name, subtask_index);
         int file_idx{ 0 };
 		bool is_found_valid_params{ false };
@@ -733,7 +764,20 @@ public:
                 m_matStitch = mat_src;
             }
             else {
-                cv::vconcat(m_matEnd,mat_src,m_matStitch);
+                if (m_matEnd.rows == 0) {
+                    m_matStitch = mat_src;
+                }
+                else {
+                    cv::vconcat(m_matEnd, mat_src, m_matStitch);
+                }
+            }
+            if (file_names[file_idx] == "Grab_000032.jpg") {
+                if ( !m_matEnd.empty() ) {
+                    cv::imwrite("debug_end.jpg", m_matEnd);
+				}
+				cv::imwrite("debug_src.jpg", mat_src);
+				cv::imwrite("debug_stitch.jpg", m_matStitch);
+                auto temp = 1;
             }
             // 查找合适的标签以及标签参数
             find_qualified_labels();

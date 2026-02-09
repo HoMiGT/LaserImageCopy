@@ -11,6 +11,7 @@ module;
 #include <memory>
 #include <string>
 #include <vector>
+#include <type_traits>
 
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
@@ -93,6 +94,7 @@ private:
 Recognize::Recognize()
 {
     m_scanner.set_config(zbar::ZBAR_QRCODE,zbar::ZBAR_CFG_ENABLE,1);
+    m_scanner.set_config(zbar::ZBAR_DATABAR, zbar::ZBAR_CFG_ENABLE, 0);
 }
 
 bool Recognize::detect(const cv::Mat &input_mat, QrCodeResult& qrret)
@@ -191,10 +193,26 @@ struct TrtDestroy
 template<typename T>
 using unp = std::unique_ptr<T,TrtDestroy>;
 
+template <class T>
+inline float to_float(T x) {
+    if constexpr (std::is_same_v<T, __half>) {
+        return __half2float(x);
+    }
+    else if constexpr (std::is_convertible_v<T, float>) {
+        return static_cast<float>(x);
+    }
+    else {
+        static_assert(std::is_convertible_v<T, float>,
+            "T must be convertible to float or provide a to_float overload.");
+    }
+}
+
 /**
  * @brief TensorRT 位置检测类
  */
-export class Location
+export
+template<typename T>
+class Location
 {
 public:
     explicit Location(std::string_view model_path);
@@ -219,8 +237,8 @@ private:
     size_t m_output_size{0};
     std::string m_error{};
     std::array<void*,2> m_buffers{};
-    std::vector<__half> m_input_data;
-    std::vector<__half> m_output_data;
+    std::vector<T> m_input_data;
+    std::vector<T> m_output_data;
     std::vector<float> m_output_float_data;
     cudaStream_t m_stream{};
     double m_scale{ 0.0 };
@@ -240,12 +258,14 @@ private:
     static void destroy_builder(const nvinfer1::IBuilder* builder, const nvinfer1::IBuilderConfig* config, const nvinfer1::INetworkDefinition* network);
 };
 
-Location::Location(const std::string_view model_path)
+template<typename T>
+Location<T>::Location(const std::string_view model_path)
     :m_model_path(model_path)
 {
 }
 
-Location::~Location()
+template<typename T>
+Location<T>::~Location()
 {
     if (m_buffers[m_input_index])
     {
@@ -261,7 +281,8 @@ Location::~Location()
     }
 }
 
-bool Location::build()
+template<typename T>
+bool Location<T>::build()
 {
     if (!serialize())
     {
@@ -294,7 +315,7 @@ bool Location::build()
     m_input_data.resize(m_input_size);
     m_output_data.resize(m_output_size);
     m_output_float_data.resize(m_output_size);
-    cudaMalloc(&m_buffers[m_input_index], sizeof(__half)* m_input_size);
+    cudaMalloc(&m_buffers[m_input_index], sizeof(T)* m_input_size);
     if (!m_context->setInputTensorAddress(m_input_name, m_buffers[m_input_index]))
     {
         m_error = "Failed to set input tensor address.";
@@ -304,7 +325,7 @@ bool Location::build()
         }
         return false;
     }
-    cudaMalloc(&m_buffers[m_output_index], sizeof(__half) * m_output_size);
+    cudaMalloc(&m_buffers[m_output_index], sizeof(T) * m_output_size);
     if (!m_context->setOutputTensorAddress(m_output_name, m_buffers[m_output_index]))
     {
         m_error = "Failed to set output tensor address.";
@@ -335,14 +356,15 @@ bool Location::build()
     return true;
 }
 
-bool Location::infer(const cv::Mat& src, std::vector<cv::Rect2i>& boxes)
+template<typename T>
+bool Location<T>::infer(const cv::Mat& src, std::vector<cv::Rect2i>& boxes)
 {
     if (!preprocess(src))
     {
         return false;
     }
     if (const auto ret = cudaMemcpyAsync(m_buffers[m_input_index],m_input_data.data(),
-        sizeof(__half)* m_input_size,cudaMemcpyHostToDevice, m_stream); ret!=cudaSuccess)
+        sizeof(T)* m_input_size,cudaMemcpyHostToDevice, m_stream); ret!=cudaSuccess)
     {
         m_error = std::format("CUDA asynchronous data synchronization failed: {}", cudaGetErrorString(ret));
         return false;
@@ -359,7 +381,7 @@ bool Location::infer(const cv::Mat& src, std::vector<cv::Rect2i>& boxes)
         return false;
     }
     if (const auto ret = cudaMemcpyAsync(m_output_data.data(),m_buffers[m_output_index],
-        sizeof(__half)*m_output_size,cudaMemcpyDeviceToHost,m_stream); ret!=cudaSuccess)
+        sizeof(T)*m_output_size,cudaMemcpyDeviceToHost,m_stream); ret!=cudaSuccess)
     {
         m_error = std::format("CUDA asynchronous data synchronization failed: {}", cudaGetErrorString(ret));
         return false;
@@ -377,12 +399,14 @@ bool Location::infer(const cv::Mat& src, std::vector<cv::Rect2i>& boxes)
     return true;
 }
 
-std::string Location::what() const
+template<typename T>
+std::string Location<T>::what() const
 {
     return m_error;
 }
 
-void Location::letterbox(const cv::Mat& src, cv::Mat& dst, const size_t nw, const size_t nh)
+template<typename T>
+void Location<T>::letterbox(const cv::Mat& src, cv::Mat& dst, const size_t nw, const size_t nh)
 {
     m_width = src.cols;
     m_height = src.rows;
@@ -413,7 +437,8 @@ void Location::letterbox(const cv::Mat& src, cv::Mat& dst, const size_t nw, cons
     cv::copyMakeBorder(dst,dst,top,bottom,left,right,cv::BORDER_CONSTANT, cv::Scalar{114,114,114});
 }
 
-bool Location::preprocess(const cv::Mat& src) noexcept
+template<typename T>
+bool Location<T>::preprocess(const cv::Mat& src) noexcept
 {
     try
     {
@@ -439,7 +464,7 @@ bool Location::preprocess(const cv::Mat& src) noexcept
             const auto data = reinterpret_cast<float*>(channel.data);
             for (auto j{0}; j < size; ++j)
             {
-                m_input_data[i*size +j] = __float2half(data[j]);
+                m_input_data[i*size +j] = to_float(data[j]);
             }
         }
         return true;
@@ -450,7 +475,10 @@ bool Location::preprocess(const cv::Mat& src) noexcept
     }
 }
 
-bool Location::postprocess(std::vector<cv::Rect2i>& boxes) noexcept
+
+
+template<typename T>
+bool Location<T>::postprocess(std::vector<cv::Rect2i>& boxes) noexcept
 {
     try
     {
@@ -459,7 +487,7 @@ bool Location::postprocess(std::vector<cv::Rect2i>& boxes) noexcept
         const auto classes = m_output_dims.d[1];
         const auto confidence = m_output_dims.d[2];
         std::ranges::transform(m_output_data.begin(),m_output_data.end(),m_output_float_data.begin(),
-            [](const __half a){return __half2float(a);});
+            [](const auto a){return to_float(a);});
         cv::Mat output_mat{
             static_cast<int>(classes),
             static_cast<int>(confidence),
@@ -511,7 +539,8 @@ bool Location::postprocess(std::vector<cv::Rect2i>& boxes) noexcept
     }
 }
 
-cv::Rect2i Location::de_letterbox(const cv::Rect2i&& box) noexcept
+template<typename T>
+cv::Rect2i Location<T>::de_letterbox(const cv::Rect2i&& box) noexcept
 {
     const double transformedWidth = std::round(m_width * m_scale);
     const double transformedHeight = std::round(m_height * m_scale);
@@ -529,7 +558,8 @@ cv::Rect2i Location::de_letterbox(const cv::Rect2i&& box) noexcept
     return rect;
 }
 
-bool Location::serialize()
+template<typename T>
+bool Location<T>::serialize()
 {
     const auto last_dot = m_model_path.find_last_of('.');
     std::string prefix;
@@ -589,7 +619,8 @@ bool Location::serialize()
     return true;
 }
 
-size_t Location::get_size_by_dims(const nvinfer1::Dims& dims)
+template<typename T>
+size_t Location<T>::get_size_by_dims(const nvinfer1::Dims& dims)
 {
     auto size = 1;
     for (auto i{0}; i < dims.nbDims; ++i)
@@ -599,7 +630,8 @@ size_t Location::get_size_by_dims(const nvinfer1::Dims& dims)
     return size;
 }
 
-void Location::print_tensor_info(const nvinfer1::ICudaEngine* engine)
+template<typename T>
+void Location<T>::print_tensor_info(const nvinfer1::ICudaEngine* engine)
 {
     const auto tensor_num = engine->getNbIOTensors();
     for (auto i{0}; i < tensor_num; ++i)
@@ -610,7 +642,8 @@ void Location::print_tensor_info(const nvinfer1::ICudaEngine* engine)
     }
 }
 
-void Location::destroy_builder(const nvinfer1::IBuilder* builder, const nvinfer1::IBuilderConfig* config,
+template<typename T>
+void Location<T>::destroy_builder(const nvinfer1::IBuilder* builder, const nvinfer1::IBuilderConfig* config,
     const nvinfer1::INetworkDefinition* network)
 {
     if (network) delete network;
