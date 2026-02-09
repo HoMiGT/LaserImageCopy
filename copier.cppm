@@ -620,7 +620,7 @@ class Task {
                     if (!cropped.isContinuous())
                         cropped = cropped.clone();
                     if (const auto ret = recognize.detect(cropped, qr); !ret) {
-                        Warn("二维码识别异常: {}", recognize.what());
+                        //Warn("二维码识别异常: {}", recognize.what());
                         continue;
                     }
                     LabelCoordinates lc{};
