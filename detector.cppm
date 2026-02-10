@@ -304,7 +304,7 @@ bool Location<T>::build()
     NvLogger logger;
     m_runtime = unp<nvinfer1::IRuntime>(nvinfer1::createInferRuntime(logger));
     m_engine = unp<nvinfer1::ICudaEngine>(m_runtime->deserializeCudaEngine(engine_data.data(),engine_size));
-    print_tensor_info(m_engine.get());
+    //print_tensor_info(m_engine.get());
     m_context = unp<nvinfer1::IExecutionContext>(m_engine->createExecutionContext());
     m_input_name = m_engine->getIOTensorName(m_input_index);
     m_output_name = m_engine->getIOTensorName(m_output_index);
