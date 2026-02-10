@@ -1168,6 +1168,8 @@ void Copier::collect_files()
                 for (const auto& file_entry : std::filesystem::directory_iterator(label_entry))
                 {
                     if (!file_entry.is_regular_file()) continue;
+                    const auto ext = file_entry.path().extension().string();
+                    if (ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".bmp" && ext != ".tiff") continue;
                     file_names.emplace_back(file_entry.path().filename().string());
                     ++count;
                 }
