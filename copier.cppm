@@ -885,8 +885,8 @@ public:
                 }
             }
             // 查找合适的标签以及标签参数
-            //find_qualified_labels();
-            find_qualified_labels_fix_size();
+            find_qualified_labels();
+            //find_qualified_labels_fix_size();
             if (!m_isFoundValidLabel) {
                 valid_first_index = file_idx+1;
                 bad_count.fetch_add(1);
