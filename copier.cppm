@@ -418,6 +418,121 @@ class Task {
 	int m_splitCount{ 0 };  // 分割数量
 	int m_saveCount{ 0 };  // 保存数量
 
+
+    void find_qualified_labels_fix_size() {
+        m_isFoundValidLabel = false;
+        const auto image_width = m_matStitch.cols;
+        const auto image_height = m_matStitch.rows;
+
+        auto& location = m_param->location;
+        auto& recoginze = m_param->recognize;
+        int max_row_count{ 0 };
+        int max_col_count{ 0 };
+
+        const auto letterbox_size = location.get_input_size();
+        const auto letterbox_width = letterbox_size[0];
+		const auto letterbox_height = letterbox_size[1];
+
+        const auto col_count = static_cast<double>(image_width) / static_cast<double>(letterbox_width);
+		const auto row_count = static_cast<double>(image_height) / static_cast<double>(letterbox_height);
+        const auto max_count = std::max(col_count, row_count);
+		const auto step_count = static_cast<int>(max_count + 0.5);
+
+        for (auto i{ 1 }; i < step_count; ++i) {
+            auto crop_width = letterbox_width * i;
+            crop_width = std::clamp(crop_width, 0, image_width);
+			auto crop_height = letterbox_height * i;
+            crop_height = std::clamp(crop_height, 0, image_height);
+            if (crop_width >= image_width) {
+				max_col_count++;
+            }
+            if (crop_height >= image_height) {
+                max_row_count++;
+            }
+			if (max_col_count > 1 && max_row_count > 1) {
+                break;
+            }
+			cv::Rect rect{ 0,0,crop_width, crop_height };
+			cv::Mat window = m_matStitch(rect);
+            if (window.empty()) {
+                continue;
+            }
+            std::vector<cv::Rect> boxes;
+            if (const auto ret = location.infer(window, boxes); !ret) {
+                continue;
+            }
+            if (boxes.empty()) {
+                continue;
+            }
+            const auto boxes_size = boxes.size();
+            std::vector<LabelCoordinates> lcs;
+            lcs.reserve(boxes_size);
+            for (const auto& box : boxes) {
+                auto cropped = window(box);
+                if (cropped.empty()) {
+                    continue;
+                }
+                if (!cropped.isContinuous()) {
+                    cropped = cropped.clone();
+                }
+                QrCodeResult qr{};
+                if (const auto ret = recoginze.detect(cropped, qr); !ret) {
+                    Warn("{}", recoginze.what());
+                    continue;
+                }
+                LabelCoordinates lc{};
+                const auto is_ok = transformer_coordinates(box, qr, m_param->extractParam, m_dpi, crop_width, crop_height, lc);
+                if (!is_ok) {
+                    continue;
+                }
+                if (lc.label.x < 0 || lc.label.y < 0 || lc.label.x > crop_width || lc.label.y > crop_height) {
+                    continue;
+                }
+                lcs.emplace_back(std::move(lc));
+            }
+            if (lcs.empty()) {
+                continue;
+            }
+            auto min_it = std::min_element(
+                lcs.begin(), lcs.end(),
+                [](const LabelCoordinates& a, const LabelCoordinates& b) {
+                    return a.euclidian_distance < b.euclidian_distance;
+                }
+            );
+            if (min_it != lcs.end()) {
+                for (const auto& item : lcs) {
+                    if (m_meanHeight == 0) {
+                        m_meanHeight = static_cast<int>((min_it->label.height + item.label.height) / 2.0 + 0.5);
+                    }
+                    else {
+                        m_meanHeight = static_cast<int>((m_meanHeight + static_cast<int>((min_it->label.height + item.label.height) / 2.0 + 0.5)) / 2.0 + 0.5);
+                    }
+                    if (m_meanWidth == 0) {
+                        m_meanWidth = static_cast<int>((min_it->label.width + item.label.width) / 2.0 + 0.5);
+                    }
+                    else {
+                        m_meanWidth = static_cast<int>((m_meanWidth + static_cast<int>((min_it->label.width + item.label.width) / 2.0 + 0.5)) / 2.0 + 0.5);
+                    }
+                    const auto distance = std::abs(min_it->label.y - item.label.y);
+                    if (distance > m_meanHeight * 0.8 && distance < m_meanHeight * 2) {
+                        m_labelFirstLineMin = *min_it;
+                        m_labelSecondLineAny = item;
+                        m_currentLc = m_labelFirstLineMin;
+                        m_previousLc = m_labelFirstLineMin;
+                        m_isFoundValidLabel = true;
+                        break;
+                    }
+                }
+            }
+            if (m_isFoundValidLabel) {
+                break;
+            }
+            if (crop_width >= image_width && crop_height >= image_height) {
+                break;
+            }
+        }
+    }
+
     void find_qualified_labels(){
         m_isFoundValidLabel = false;
 		const auto image_width = m_matStitch.cols;
@@ -473,7 +588,7 @@ class Task {
                     }
                     QrCodeResult qr{};
                     if (const auto ret = recoginze.detect(cropped, qr); !ret) {
-                        Warn("{}", recoginze.what());
+                        //Warn("{}", recoginze.what());
                         continue;
                     }
                     LabelCoordinates lc{};
@@ -674,9 +789,9 @@ class Task {
                 sa.ey += m_meanWidth * 0.618;
             }
             if (is_found_next) {
-                Info("二维码信息: {}, 二维码坐标信息: (x: {}, y: {}, w: {}, h: {}), 完整PDF标签坐标信息: (x: {}, y: {}, w: {}, h: {})", 
+                /*Info("二维码信息: {}, 二维码坐标信息: (x: {}, y: {}, w: {}, h: {}), 完整PDF标签坐标信息: (x: {}, y: {}, w: {}, h: {})", 
                     m_currentLc.qr_context,m_currentLc.qr.x, m_currentLc.qr.y, m_currentLc.qr.width, m_currentLc.qr.height,
-                    m_currentLc.label.x, m_currentLc.label.y, m_currentLc.label.width, m_currentLc.label.height);
+                    m_currentLc.label.x, m_currentLc.label.y, m_currentLc.label.width, m_currentLc.label.height);*/
                 // 保存图片，并更新参数，并对下一个区域进行判断是否满足下一次的截取
                 // 满足则进行下一次循环，
                 // 不满足则保存末尾的图片，结束循环，进行下一张图片的拼接和重新截取
@@ -770,7 +885,8 @@ public:
                 }
             }
             // 查找合适的标签以及标签参数
-            find_qualified_labels();
+            //find_qualified_labels();
+            find_qualified_labels_fix_size();
             if (!m_isFoundValidLabel) {
                 valid_first_index = file_idx+1;
                 bad_count.fetch_add(1);

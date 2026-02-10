@@ -220,6 +220,7 @@ public:
 
     bool build();
     bool infer(const cv::Mat& src, std::vector<cv::Rect2i>& boxes);
+    std::array<int, 2> get_input_size() const noexcept;
     [[nodiscard]] std::string what() const;
 
 private:
@@ -279,6 +280,14 @@ Location<T>::~Location()
     {
         cudaStreamDestroy(m_stream);
     }
+}
+
+template<typename T>
+std::array<int, 2> Location<T>::get_input_size() const noexcept {
+    const auto height = m_input_dims.d[2];
+    const auto width = m_input_dims.d[3];
+    std::array<int, 2> size{ width, height };
+    return size;
 }
 
 template<typename T>
