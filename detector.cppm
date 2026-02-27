@@ -534,7 +534,7 @@ bool Location<T>::postprocess(std::vector<cv::Rect2i>& boxes) noexcept
 			const auto& box = suspected_boxes[id];
             const auto aspect_ratio = static_cast<float>(box.width) / static_cast<float>(box.height);
             // 只保留接近正方形的框
-            if (aspect_ratio < 0.8f || aspect_ratio > 1.2f)
+            if (aspect_ratio < 0.618f || aspect_ratio > 1.618f)
             {
                 continue;
             }
