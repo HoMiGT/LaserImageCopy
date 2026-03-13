@@ -2,6 +2,7 @@
 // Created by houmin on 2026/1/16.
 //
 module;
+#include <cmath>
 #include <algorithm>
 #include <chrono>
 #include <format>
@@ -246,7 +247,7 @@ inline static bool transformer_coordinates(const cv::Rect2i& box, const QrCodeRe
     switch (qrret.orientation) {
     case QrOrientation::UP:
     {
-        const auto qr_pixel = qrret.RightTop.x - qrret.LeftTop.x;
+        const auto qr_pixel = std::abs(qrret.RightTop.x - qrret.LeftTop.x);
         if (dpi == 0.0) {
             dpi = qr_pixel * 25.4 / param.side_length;
         }
@@ -281,7 +282,7 @@ inline static bool transformer_coordinates(const cv::Rect2i& box, const QrCodeRe
     }
     case QrOrientation::RIGHT:
     {
-        const auto qr_pixel = qrret.RightTop.y - qrret.LeftTop.y;
+        const auto qr_pixel = std::abs(qrret.RightTop.y - qrret.LeftTop.y);
         if (dpi == 0.0) {
             dpi = qr_pixel * 25.4 / param.side_length;
         }
@@ -316,7 +317,7 @@ inline static bool transformer_coordinates(const cv::Rect2i& box, const QrCodeRe
     }
     case QrOrientation::DOWN:
     {
-        const auto qr_pixel = qrret.RightTop.x - qrret.LeftTop.x;
+        const auto qr_pixel = std::abs(qrret.RightTop.x - qrret.LeftTop.x);
         if (dpi == 0.0) {
             dpi = qr_pixel * 25.4 / param.side_length;
         }
@@ -351,7 +352,7 @@ inline static bool transformer_coordinates(const cv::Rect2i& box, const QrCodeRe
     }
     case QrOrientation::LEFT:
     {
-        const auto qr_pixel = qrret.LeftTop.y - qrret.RightTop.y;
+        const auto qr_pixel = std::abs(qrret.LeftTop.y - qrret.RightTop.y);
         if (dpi == 0.0) {
             dpi = qr_pixel * 25.4 / param.side_length;
         }
@@ -436,7 +437,7 @@ class Task {
         const auto col_count = static_cast<double>(image_width) / static_cast<double>(letterbox_width);
 		const auto row_count = static_cast<double>(image_height) / static_cast<double>(letterbox_height);
         const auto max_count = std::max(col_count, row_count);
-		const auto step_count = static_cast<int>(max_count + 0.5);
+		const auto step_count = static_cast<int>(std::ceil(max_count));
 
         for (auto i{ 1 }; i < step_count; ++i) {
             auto crop_width = letterbox_width * i;
@@ -457,6 +458,7 @@ class Task {
             if (window.empty()) {
                 continue;
             }
+			//cv::imwrite("windows.png", window);
             std::vector<cv::Rect> boxes;
             if (const auto ret = location.infer(window, boxes); !ret) {
                 continue;
@@ -472,6 +474,7 @@ class Task {
                 if (cropped.empty()) {
                     continue;
                 }
+				//cv::imwrite("cropped.png", cropped);
                 if (!cropped.isContinuous()) {
                     cropped = cropped.clone();
                 }
@@ -499,7 +502,7 @@ class Task {
                     return a.euclidian_distance < b.euclidian_distance;
                 }
             );
-            if (min_it != lcs.end()) {
+             if (min_it != lcs.end()) {
                 for (const auto& item : lcs) {
                     if (m_meanHeight == 0) {
                         m_meanHeight = static_cast<int>((min_it->label.height + item.label.height) / 2.0 + 0.5);
@@ -542,14 +545,15 @@ class Task {
 
         auto& location = m_param->location;
         auto& recoginze = m_param->recognize;
-        int max_row_count{ 0 };
         int max_col_count{ 0 };
-        const std::vector<double> col_rates{0.33};
+        const std::vector<double> col_rates{0.33,0.5,0.7,1.0};
         for (const auto& col_rate : col_rates) {
+            auto row_rate = m_row_rate;
+            int max_row_count{ 0 };
             while (true) {
                 auto crop_width = static_cast<int>(image_width * col_rate + m_stepHorizontal);
                 crop_width = std::clamp(crop_width, 0, image_width);
-                auto crop_height = static_cast<int>(image_height * m_row_rate + m_stepVertical);
+                auto crop_height = static_cast<int>(image_height * row_rate + m_stepVertical);
                 crop_height = std::clamp(crop_height, 0, image_height);
                 if (crop_width >= image_width) {
                     max_col_count++;
@@ -563,16 +567,17 @@ class Task {
                 cv::Rect rect{ 0,0,crop_width, crop_height };
                 cv::Mat window = m_matStitch(rect);
                 if (window.empty()) {
-					m_row_rate *= 1.41421356;
+                    row_rate *= 1.41421356;
 					continue;
                 }
+                //cv::imwrite("windows.png", window);
                 std::vector<cv::Rect> boxes;
                 if (const auto ret = location.infer(window, boxes); !ret) {
-                    m_row_rate *= 1.41421356;
+                    row_rate *= 1.41421356;
                     continue;
                 }
                 if (boxes.empty()) {
-                    m_row_rate *= 1.41421356;
+                    row_rate *= 1.41421356;
                     continue;
                 }
                 const auto boxes_size = boxes.size();
@@ -583,6 +588,7 @@ class Task {
                     if (cropped.empty()) {
                         continue;
                     }
+					//cv::imwrite("cropped.png", cropped);
                     if (!cropped.isContinuous()) {
                         cropped = cropped.clone();
                     }
@@ -602,7 +608,7 @@ class Task {
                     lcs.emplace_back(std::move(lc));
                 }
                 if (lcs.empty()) {
-                    m_row_rate *= 1.41421356;
+                    row_rate *= 1.41421356;
                     continue;
                 }
                 auto min_it = std::min_element(
@@ -642,7 +648,7 @@ class Task {
                 if (crop_width >= image_width && crop_height >= image_height) {
                     break;
                 }
-                m_row_rate *= 1.41421356;
+                row_rate *= 1.41421356;
             }
             if (m_isFoundValidLabel) {
                 break;
