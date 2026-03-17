@@ -296,7 +296,7 @@ inline static bool transformer_coordinates(const cv::Rect2i& box, const QrCodeRe
         const auto label_y_distance = param.left_top.x * temp;
         qr_left_top_point.x = p0.x + qrret.LeftTop.x;
         qr_left_top_point.y = p0.y + qrret.LeftTop.y;
-        const auto label_left_top_x = qr_left_top_point.x + label_x_distance - label_height;
+        const auto label_left_top_x = qr_left_top_point.x + label_x_distance - label_width;
         const auto label_left_top_y = qr_left_top_point.y - label_y_distance;
         lc.label.x = static_cast<int>(label_left_top_x + 0.5) + col_offset;
         lc.label.y = static_cast<int>(label_left_top_y + 0.5) + row_offset;
@@ -367,7 +367,7 @@ inline static bool transformer_coordinates(const cv::Rect2i& box, const QrCodeRe
         qr_left_top_point.x = p0.x + qrret.LeftTop.x;
         qr_left_top_point.y = p0.y + qrret.LeftTop.y;
         const auto label_left_top_x = qr_left_top_point.x - label_x_distance;
-        const auto label_left_top_y = qr_left_top_point.y + label_y_distance - label_height;
+        const auto label_left_top_y = qr_left_top_point.y + label_y_distance - label_width;
         lc.label.x = static_cast<int>(label_left_top_x + 0.5) + col_offset;
         lc.label.y = static_cast<int>(label_left_top_y + 0.5) + row_offset;
         lc.label.width = static_cast<int>(label_width + 0.5);
@@ -401,6 +401,24 @@ struct SlideArea {
 };
 
 
+inline static std::string find_id(const std::string& qr_context, int id) {
+    auto pos = qr_context.find("?");
+    std::string code_id;
+    if (pos != std::string::npos) {
+        code_id = qr_context.substr(pos + 1);   // 从 '?' 后一位到结尾
+    }
+    else {
+        pos = qr_context.find("=");
+        if (pos != std::string::npos) {
+            code_id = qr_context.substr(pos + 1);   // 从 '=' 后一位到结尾
+        }
+        else {
+            code_id = std::to_string(id);
+        }
+    }
+    return code_id;
+}
+
 class Task {
     std::unique_ptr<TaskParam> m_param; // 外部参数
 	cv::Mat m_matStitch;  // 拼接图像
@@ -420,436 +438,6 @@ class Task {
 	int m_saveCount{ 0 };  // 保存数量
 
 
-    void find_qualified_labels_fix_size() {
-        m_isFoundValidLabel = false;
-        const auto image_width = m_matStitch.cols;
-        const auto image_height = m_matStitch.rows;
-
-        auto& location = m_param->location;
-        auto& recoginze = m_param->recognize;
-        int max_row_count{ 0 };
-        int max_col_count{ 0 };
-
-        const auto letterbox_size = location.get_input_size();
-        const auto letterbox_width = letterbox_size[0];
-		const auto letterbox_height = letterbox_size[1];
-
-        const auto col_count = static_cast<double>(image_width) / static_cast<double>(letterbox_width);
-		const auto row_count = static_cast<double>(image_height) / static_cast<double>(letterbox_height);
-        const auto max_count = std::max(col_count, row_count);
-		const auto step_count = static_cast<int>(std::ceil(max_count));
-
-        for (auto i{ 1 }; i < step_count; ++i) {
-            auto crop_width = letterbox_width * i;
-            crop_width = std::clamp(crop_width, 0, image_width);
-			auto crop_height = letterbox_height * i;
-            crop_height = std::clamp(crop_height, 0, image_height);
-            if (crop_width >= image_width) {
-				max_col_count++;
-            }
-            if (crop_height >= image_height) {
-                max_row_count++;
-            }
-			if (max_col_count > 1 && max_row_count > 1) {
-                break;
-            }
-			cv::Rect rect{ 0,0,crop_width, crop_height };
-			cv::Mat window = m_matStitch(rect);
-            if (window.empty()) {
-                continue;
-            }
-			//cv::imwrite("windows.png", window);
-            std::vector<cv::Rect> boxes;
-            if (const auto ret = location.infer(window, boxes); !ret) {
-                continue;
-            }
-            if (boxes.empty()) {
-                continue;
-            }
-            const auto boxes_size = boxes.size();
-            std::vector<LabelCoordinates> lcs;
-            lcs.reserve(boxes_size);
-            for (const auto& box : boxes) {
-                auto cropped = window(box);
-                if (cropped.empty()) {
-                    continue;
-                }
-				//cv::imwrite("cropped.png", cropped);
-                if (!cropped.isContinuous()) {
-                    cropped = cropped.clone();
-                }
-                QrCodeResult qr{};
-                if (const auto ret = recoginze.detect(cropped, qr); !ret) {
-                    Warn("{}", recoginze.what());
-                    continue;
-                }
-                LabelCoordinates lc{};
-                const auto is_ok = transformer_coordinates(box, qr, m_param->extractParam, m_dpi, crop_width, crop_height, lc);
-                if (!is_ok) {
-                    continue;
-                }
-                if (lc.label.x < 0 || lc.label.y < 0 || lc.label.x > crop_width || lc.label.y > crop_height) {
-                    continue;
-                }
-                lcs.emplace_back(std::move(lc));
-            }
-            if (lcs.empty()) {
-                continue;
-            }
-            auto min_it = std::min_element(
-                lcs.begin(), lcs.end(),
-                [](const LabelCoordinates& a, const LabelCoordinates& b) {
-                    return a.euclidian_distance < b.euclidian_distance;
-                }
-            );
-             if (min_it != lcs.end()) {
-                for (const auto& item : lcs) {
-                    if (m_meanHeight == 0) {
-                        m_meanHeight = static_cast<int>((min_it->label.height + item.label.height) / 2.0 + 0.5);
-                    }
-                    else {
-                        m_meanHeight = static_cast<int>((m_meanHeight + static_cast<int>((min_it->label.height + item.label.height) / 2.0 + 0.5)) / 2.0 + 0.5);
-                    }
-                    if (m_meanWidth == 0) {
-                        m_meanWidth = static_cast<int>((min_it->label.width + item.label.width) / 2.0 + 0.5);
-                    }
-                    else {
-                        m_meanWidth = static_cast<int>((m_meanWidth + static_cast<int>((min_it->label.width + item.label.width) / 2.0 + 0.5)) / 2.0 + 0.5);
-                    }
-                    const auto distance = std::abs(min_it->label.y - item.label.y);
-                    if (distance > m_meanHeight * 0.8 && distance < m_meanHeight * 2) {
-                        m_labelFirstLineMin = *min_it;
-                        m_labelSecondLineAny = item;
-                        m_currentLc = m_labelFirstLineMin;
-                        m_previousLc = m_labelFirstLineMin;
-                        m_isFoundValidLabel = true;
-                        break;
-                    }
-                }
-            }
-            if (m_isFoundValidLabel) {
-                break;
-            }
-            if (crop_width >= image_width && crop_height >= image_height) {
-                break;
-            }
-        }
-    }
-
-    void find_qualified_labels(){
-        m_isFoundValidLabel = false;
-		const auto image_width = m_matStitch.cols;
-        const auto image_height = m_matStitch.rows;
-        const auto max_length = std::max(image_width, image_height);
-        auto m_row_rate = 0.25 * max_length / image_height;
-
-        auto& location = m_param->location;
-        auto& recoginze = m_param->recognize;
-        int max_col_count{ 0 };
-        const std::vector<double> col_rates{0.33,0.5,0.7,1.0};
-        for (const auto& col_rate : col_rates) {
-            auto row_rate = m_row_rate;
-            int max_row_count{ 0 };
-            while (true) {
-                auto crop_width = static_cast<int>(image_width * col_rate + m_stepHorizontal);
-                crop_width = std::clamp(crop_width, 0, image_width);
-                auto crop_height = static_cast<int>(image_height * row_rate + m_stepVertical);
-                crop_height = std::clamp(crop_height, 0, image_height);
-                if (crop_width >= image_width) {
-                    max_col_count++;
-                }
-                if (crop_height >= image_height) {
-                    max_row_count++;
-                }
-                if (max_col_count > 1 || max_row_count > 1) {
-                    break;
-                }
-                cv::Rect rect{ 0,0,crop_width, crop_height };
-                cv::Mat window = m_matStitch(rect);
-                if (window.empty()) {
-                    row_rate *= 1.41421356;
-					continue;
-                }
-                //cv::imwrite("windows.png", window);
-                std::vector<cv::Rect> boxes;
-                if (const auto ret = location.infer(window, boxes); !ret) {
-                    row_rate *= 1.41421356;
-                    continue;
-                }
-                if (boxes.empty()) {
-                    row_rate *= 1.41421356;
-                    continue;
-                }
-                const auto boxes_size = boxes.size();
-                std::vector<LabelCoordinates> lcs;
-                lcs.reserve(boxes_size);
-                for (const auto& box : boxes) {
-                    auto cropped = window(box);
-                    if (cropped.empty()) {
-                        continue;
-                    }
-					//cv::imwrite("cropped.png", cropped);
-                    if (!cropped.isContinuous()) {
-                        cropped = cropped.clone();
-                    }
-                    QrCodeResult qr{};
-                    if (const auto ret = recoginze.detect(cropped, qr); !ret) {
-                        //Warn("{}", recoginze.what());
-                        continue;
-                    }
-                    LabelCoordinates lc{};
-                    const auto is_ok = transformer_coordinates(box, qr, m_param->extractParam, m_dpi, crop_width, crop_height, lc);
-                    if (!is_ok) {
-                        continue;
-                    }
-                    if (lc.label.x < 0 || lc.label.y < 0 || lc.label.x > crop_width || lc.label.y > crop_height) {
-                        continue;
-                    }
-                    lcs.emplace_back(std::move(lc));
-                }
-                if (lcs.empty()) {
-                    row_rate *= 1.41421356;
-                    continue;
-                }
-                auto min_it = std::min_element(
-                    lcs.begin(), lcs.end(),
-                    [](const LabelCoordinates& a, const LabelCoordinates& b) {
-                        return a.euclidian_distance < b.euclidian_distance;
-                    }
-                );
-                if (min_it != lcs.end()) {
-                    for (const auto& item : lcs) {
-                        if (m_meanHeight == 0) {
-                            m_meanHeight = static_cast<int>((min_it->label.height + item.label.height) / 2.0 + 0.5);
-                        }
-                        else {
-                            m_meanHeight = static_cast<int>((m_meanHeight + static_cast<int>((min_it->label.height + item.label.height) / 2.0 + 0.5)) / 2.0 + 0.5);
-                        }
-                        if (m_meanWidth == 0) {
-                            m_meanWidth = static_cast<int>((min_it->label.width + item.label.width) / 2.0 + 0.5);
-                        }
-                        else {
-                            m_meanWidth = static_cast<int>((m_meanWidth + static_cast<int>((min_it->label.width + item.label.width) / 2.0 + 0.5)) / 2.0 + 0.5);
-                        }
-                        const auto distance = std::abs(min_it->label.y - item.label.y);
-                        if (distance > m_meanHeight * 0.8 && distance < m_meanHeight * 2) {
-                            m_labelFirstLineMin = *min_it;
-                            m_labelSecondLineAny = item;
-                            m_currentLc = m_labelFirstLineMin;
-                            m_previousLc = m_labelFirstLineMin;
-                            m_isFoundValidLabel = true;
-                            break;
-                        }
-                    }
-                }
-                if (m_isFoundValidLabel) {
-                    break;
-                }
-                if (crop_width >= image_width && crop_height >= image_height) {
-                    break;
-                }
-                row_rate *= 1.41421356;
-            }
-            if (m_isFoundValidLabel) {
-                break;
-            }
-        }
-    }
-
-    void slide_capture(SlideArea& sa,const int idx, std::atomic<int>& actual_split_count) {
-        // 识别、定位、额外辅助参数
-        auto& recognize = m_param->recognize;
-        auto& location = m_param->location;
-        auto& extract_param = m_param->extractParam;
-        // 文件路径以及文件信息
-        const auto& dst_last_dir = m_param->dstPath;
-		const auto& file_name = m_param->fileNames[idx];
-        const auto dst_abs_path = dst_last_dir / file_name;
-		const auto file_stem = dst_abs_path.stem().string();
-		const auto file_ext = dst_abs_path.extension().string();
-        // 保存路径的列表信息
-        const auto image_width = m_matStitch.cols;
-        const auto image_height = m_matStitch.rows;
-        const auto split_count = static_cast<int>(static_cast<double>(image_height) / m_meanHeight + 0.5);
-        std::vector<std::string> save_file_names;
-        save_file_names.reserve(split_count);
-        bool is_invalid_image{ false };
-        int slide_idx{ 0 };
-
-        do {
-            if (m_param->isFirst && idx == 0 && slide_idx == 0) {
-                // 仅文件夹第一个文件保存
-                const auto offset = static_cast<int>(m_lineSapce / 2.0 + 0.5);
-                auto cut_start = m_currentLc.label.y - offset;
-                auto cut_end = m_currentLc.label.y + m_currentLc.label.height + offset;
-                cut_start = std::clamp(cut_start, 0, image_height);
-                cut_end = std::clamp(cut_end, 0, image_height);
-                if (cut_start >= cut_end) {
-                    Warn("请核查, 该图无法正确检测合格标签: {}", dst_abs_path.string());
-                    is_invalid_image = true;
-                    break;
-                }
-                const auto save_mat = m_matStitch.rowRange(cut_start, cut_end);
-                const auto save_abs_path = (dst_last_dir / std::format("{}_P0{}", file_stem, file_ext)).string();
-                cv::imwrite(save_abs_path, save_mat);
-                save_file_names.emplace_back(save_abs_path);
-                actual_split_count.fetch_add(1);
-                // 更新参数
-                sa.sy += static_cast<int>(m_lineSapce / 2.0 + 0.5) * 2 + m_meanHeight;
-                sa.ey += static_cast<int>(m_lineSapce / 2.0 + 0.5) * 2 + m_meanHeight;
-                continue;
-            }
-            if (!m_param->isFirst && idx == 0 && slide_idx == 0) {
-                // 其他任务的第一个文件是重复，所以不保存仅更新参数
-                sa.sy += static_cast<int>(m_lineSapce / 2.0 + 0.5) * 2 + m_meanHeight;
-                sa.ey += static_cast<int>(m_lineSapce / 2.0 + 0.5) * 2 + m_meanHeight;
-                continue;
-            }
-            bool is_found_next{ false };
-            int max_row_count{ 0 };
-            int max_col_count{ 0 };
-            // 滑动区域，检测下一个完整标签
-            while (true) {
-                auto sx = sa.sx;
-                auto sy = sa.sy;
-                auto sw = sa.ex - sa.sx;
-                auto sh = sa.ey - sa.sy;
-                // 限制截取超出边界
-                sx = std::clamp(sx, 0, image_width);
-                sy = std::clamp(sy, 0, image_height);
-                if (sx + sw > image_width) {
-                    sw = image_width - sx;
-                    max_col_count++;
-                }
-                if (sy + sh > image_height) {
-                    sh = image_height - sy;
-                    max_row_count++;
-                }
-                // 多次区域已经最大，但无结果，说明该图是无用图
-                if (max_col_count > 1 && max_row_count > 1) {
-                    const auto path = m_param->srcPath / file_name;
-                    Warn("请核查, 该图无法正确检测合格标签: {}", path.string());
-                    is_invalid_image = true;
-                    break;
-                }
-                // 截取图片
-                cv::Rect slide_win{ sx,sy,sw,sh };
-                cv::Mat slide_mat = m_matStitch(slide_win);
-                if (slide_mat.empty()) {
-                    sa.ex += m_meanWidth * 0.618;
-                    sa.ey += m_meanWidth * 0.618;
-                    continue;
-                }
-                // 进行推理检测并调整位置
-                std::vector<cv::Rect> boxes;
-                if (const auto ret = location.infer(slide_mat, boxes); !ret) {
-                    sa.ex += m_meanWidth * 0.618;
-                    sa.ey += m_meanWidth * 0.618;
-                    continue;
-                }
-                if (boxes.empty()) {
-                    sa.ex += m_meanWidth * 0.618;
-                    sa.ey += m_meanWidth * 0.618;
-                    continue;
-                }
-                std::vector<LabelCoordinates> lcs;
-                lcs.reserve(boxes.size());
-                QrCodeResult qr{};
-                for (const auto& box : boxes) {
-                    auto cropped = slide_mat(box);
-                    if (cropped.empty()) {
-                        continue;
-                    }
-                    if (!cropped.isContinuous())
-                        cropped = cropped.clone();
-                    if (const auto ret = recognize.detect(cropped, qr); !ret) {
-                        //Warn("二维码识别异常: {}", recognize.what());
-                        continue;
-                    }
-                    LabelCoordinates lc{};
-                    if (const auto ok = transformer_coordinates(box, qr, extract_param, m_dpi, sw, sh, lc, sx, sy); !ok) {
-                        continue;
-                    }
-                    // 不是合格的完整区域的标签
-                    if (lc.label.x < 0 || lc.label.y < 0 || lc.label.x > sw + sx
-                        || lc.label.y > sh + sy) {
-                        continue;
-                    }
-                    lcs.emplace_back(std::move(lc));
-                }
-                if (lcs.empty()) {
-                    sa.ex += m_meanWidth * 0.618;
-                    sa.ey += m_meanWidth * 0.618;
-                    continue;
-                }
-                auto min_it = std::min_element(lcs.begin(), lcs.end(),
-                    [](const LabelCoordinates& a, const LabelCoordinates& b) {
-                        return a.euclidian_distance < b.euclidian_distance;
-                    });
-                if (min_it != lcs.end()) {
-                    m_currentLc = *min_it;
-                    is_found_next = true;
-                    break;
-                }
-                sa.ex += m_meanWidth * 0.618;
-                sa.ey += m_meanWidth * 0.618;
-            }
-            if (is_found_next) {
-                /*Info("二维码信息: {}, 二维码坐标信息: (x: {}, y: {}, w: {}, h: {}), 完整PDF标签坐标信息: (x: {}, y: {}, w: {}, h: {})", 
-                    m_currentLc.qr_context,m_currentLc.qr.x, m_currentLc.qr.y, m_currentLc.qr.width, m_currentLc.qr.height,
-                    m_currentLc.label.x, m_currentLc.label.y, m_currentLc.label.width, m_currentLc.label.height);*/
-                // 保存图片，并更新参数，并对下一个区域进行判断是否满足下一次的截取
-                // 满足则进行下一次循环，
-                // 不满足则保存末尾的图片，结束循环，进行下一张图片的拼接和重新截取
-                m_meanHeight = m_meanHeight == 0 ? m_currentLc.label.height : static_cast<int>((m_meanHeight + m_currentLc.label.height) / 2.0 + 0.5);
-                m_meanWidth = m_meanWidth == 0 ? m_currentLc.label.width : static_cast<int>((m_meanWidth + m_currentLc.label.width) / 2.0 + 0.5);
-                if (const auto temp_lineSapce = std::abs(m_previousLc.label.y - m_currentLc.label.y) - m_meanHeight; temp_lineSapce > 0 && temp_lineSapce < m_meanHeight) {
-                    m_lineSapce = temp_lineSapce;
-                }
-                const auto offset = static_cast<int>(m_lineSapce / 2.0 + 0.5);
-                auto cut_start = m_currentLc.label.y - offset;
-                cut_start = std::clamp(cut_start, 0, image_height);
-                auto cut_end = m_currentLc.label.y + m_currentLc.label.height + offset;
-                cut_end = std::clamp(cut_end, 0, image_height);
-                if (idx > 0 || (idx==0 && m_param->isFirst)) {
-                    const auto save_mat = m_matStitch.rowRange(cut_start, cut_end);
-                    const auto save_file_name = std::format("{}_P{}{}", file_stem, slide_idx, file_ext);
-                    const auto save_abs_path = (dst_last_dir / save_file_name).string();
-                    cv::imwrite(save_abs_path, save_mat);
-                    save_file_names.emplace_back(save_file_name);
-                    actual_split_count.fetch_add(1);
-                }
-                sa.sx = static_cast<int>(m_currentLc.label.x - m_meanWidth * 0.25 + 0.5);
-                sa.ex = static_cast<int>(m_currentLc.label.x + m_meanWidth * 1.25 + 0.5);
-                sa.sy = cut_start + static_cast<int>(m_lineSapce / 2.0 + 0.5) * 2 + m_meanHeight;
-                sa.ey = cut_end + static_cast<int>(m_lineSapce / 2.0 + 0.5) * 2 + m_meanHeight;
-                m_previousLc = m_currentLc;
-                // 更新图片末尾
-                if (sa.sy > image_height) {
-                    break;
-                }
-                if (sa.ey > image_height) {
-                    if (cut_end >= image_height) {
-                        break;
-                    }
-                    m_matEnd = m_matStitch.rowRange(cut_end, image_height);
-                    break;
-                }
-            }
-        } while (!is_invalid_image && slide_idx++ < split_count);
-        const auto src_abs_path = m_param->srcPath / file_name;
-        std::stringstream ss;
-        for (const auto& item : save_file_names) {
-            ss << item << ",";
-        }
-        auto split_path = ss.str();
-        if (!split_path.empty() && split_path.back() == ',') {
-            split_path.pop_back();
-        }
-        Info("\nsrc_abs_path: {},\ndst_abs_path: {},\ndst_abs_split_paths: [ {} ]",src_abs_path.string(),dst_abs_path.string(),split_path);
-        Logger::flush();
-    }
-
 
 public:
     explicit Task(std::unique_ptr<TaskParam>&& param)
@@ -860,68 +448,139 @@ public:
     ~Task() = default;
 
     void run(BlockProgressBar& bar, int subtask_index, const int task_index, const std::string& setting_name,
-        std::atomic<int>& actual_count, std::atomic<int>& actual_split_count,std::atomic<int>& bad_count, 
-        const int total){
-		if (!m_param->isInitialize) {
+        std::atomic<int>& actual_count, std::atomic<int>& actual_split_count, std::atomic<int>& bad_count,
+        const int total) {
+        if (!m_param->isInitialize){
             Error("Task-{}( {} )_Part-{} initialization failed, skip the task!", task_index, setting_name, subtask_index);
             return;
         }
         Info("Task-{}( {} )_Part-{} start to execute...", task_index, setting_name, subtask_index);
         int file_idx{ 0 };
-		bool is_found_valid_params{ false };
+        bool is_found_valid_params{ false };
         const auto& src_path = m_param->srcPath;
-		const auto& file_names = m_param->fileNames;
+        const auto& file_names = m_param->fileNames;
         const auto& is_first = m_param->isFirst;
         int valid_first_index{ 0 };
-        do {
-			// 初始化滑动区域参数
-            SlideArea sa{};
-			const auto src_abs_path = src_path / file_names[file_idx];
-            const auto mat_src = cv::imread(src_abs_path.string());
-            // 读取图片并拼接
-            if (file_idx <= valid_first_index ) {
-                m_matStitch = mat_src;
+        
+        cv::Mat tmp_mat;
+        cv::Mat mat_src;
+
+        auto& location = m_param->location;
+        auto& recoginze = m_param->recognize;
+
+        const auto& dst_last_dir = m_param->dstPath;
+
+		std::unordered_map<std::string, int> code_id_count; // 二维码ID计数器
+        for (auto idx{ 0 }; idx < m_saveCount; ++idx){
+            const auto src_abs_path = src_path / file_names[idx];
+            if (tmp_mat.empty()){
+                mat_src = cv::imread(src_abs_path.string());
             }
             else {
-                if (m_matEnd.rows == 0) {
-                    m_matStitch = mat_src;
+                const auto tmp_src = cv::imread(src_abs_path.string());
+                if (tmp_src.empty()) {
+                    Warn("无法读取图片: {}, 跳过该图片的裁剪操作!", src_abs_path.string());
+                    bad_count.fetch_add(1);
+                    continue;
+                }
+				cv::vconcat(tmp_mat, tmp_src, mat_src);
+            }
+			const auto width = mat_src.cols;
+            const auto height = mat_src.rows;
+            std::vector<cv::Rect> boxes;
+            if (const auto ret = location.infer(mat_src, boxes); !ret) {
+                bad_count.fetch_add(1);
+                continue;
+            }
+            if (boxes.empty()) {
+                bad_count.fetch_add(1);
+                continue;
+            }
+            const auto boxes_size = boxes.size();
+            std::vector<LabelCoordinates> lcs_yes;
+            lcs_yes.reserve(boxes_size);
+            for (const auto& box : boxes) {
+                auto cropped = mat_src(box);
+                if (cropped.empty()) {
+                    continue;
+                }
+				//cv::imwrite("cropped.png", cropped);
+                if (!cropped.isContinuous()) {
+                    cropped = cropped.clone();
+                }
+                QrCodeResult qr{};
+                if (const auto ret = recoginze.detect(cropped, qr); !ret) {
+                    continue;
+                }
+                LabelCoordinates lc{};
+                const auto is_ok = transformer_coordinates(box, qr, m_param->extractParam, m_dpi, width, height, lc);
+                if (!is_ok) {
+                    continue;
+                }
+                if (lc.label.x < 0 || lc.label.y < 0 || lc.label.x > width || lc.label.y > height || lc.label.x + lc.label.width > width || lc.label.y + lc.label.height > height) {
+                    continue;
+                }
+                const auto tmp_save_src = mat_src.clone();
+				//cv::rectangle(tmp_save_src, lc.label, cv::Scalar(255, 0, 0), 8);
+                //cv::imwrite("mat_src.png", tmp_save_src);
+				//cv::imshow("cropped", cropped);
+				//cv::namedWindow("mat_src", cv::WINDOW_NORMAL | cv::WINDOW_KEEPRATIO);
+				//cv::imshow("mat_src", mat_src);
+				//cv::waitKey(0);
+                lcs_yes.emplace_back(std::move(lc));
+            }
+            const auto crop_y = static_cast<int>(static_cast<double>(height) * 3.0 / 4.0 + 0.5);
+            tmp_mat = mat_src.rowRange(crop_y, height);
+            if (lcs_yes.empty()) {
+                bad_count.fetch_add(1);
+                continue;
+            }
+            const auto& file_name = m_param->fileNames[idx];
+            const auto dst_abs_path = dst_last_dir / file_name;
+            const auto file_stem = dst_abs_path.stem().string();
+            const auto file_ext = dst_abs_path.extension().string();
+            auto yes_idx{ 0 };
+            std::vector<std::string> save_file_names;
+            for (const auto& item: lcs_yes){
+                const auto save_mat = mat_src(item.label);
+                yes_idx++;
+				const std::string code_id = find_id(item.qr_context, yes_idx);
+                if (code_id_count.find(code_id) == code_id_count.end()) {
+                    code_id_count[code_id] = 1;
+                    const auto save_file_name = std::format("{}_{}{}", file_stem, code_id, file_ext);
+                    const auto save_abs_path = (dst_last_dir / save_file_name).string();
+                    cv::imwrite(save_abs_path, save_mat);
+                    save_file_names.emplace_back(save_file_name);
+                    actual_split_count.fetch_add(1);
                 }
                 else {
-                    cv::vconcat(m_matEnd, mat_src, m_matStitch);
-                }
+                    code_id_count[code_id]++;
+				}
             }
-            // 查找合适的标签以及标签参数
-            find_qualified_labels();
-            //find_qualified_labels_fix_size();
-            if (!m_isFoundValidLabel) {
-                valid_first_index = file_idx+1;
-                bad_count.fetch_add(1);
-                Warn("在图片[ {} ]中没有找到合适的标签，跳过该图片的裁剪操作!", src_abs_path.string());
-                continue;
-            }
-            m_lineSapce = static_cast<int>(std::abs(m_labelSecondLineAny.label.y - m_labelFirstLineMin.label.y) - m_meanHeight + 0.5);
-            sa.sx = std::max(0, m_labelFirstLineMin.label.x - static_cast<int>(m_labelFirstLineMin.label.width * 0.25 + 0.5));
-            sa.ex = std::min(m_matStitch.cols, m_labelFirstLineMin.label.x + static_cast<int>(m_labelFirstLineMin.label.width * 1.25 + 0.5));
-            sa.sy = std::max(0, m_labelFirstLineMin.label.y - static_cast<int>(m_lineSapce * 0.5 + 0.5));
-            sa.ey = std::min(m_matStitch.rows, m_labelFirstLineMin.label.y + m_meanHeight + static_cast<int>(m_lineSapce * 0.5 + 0.5));
-            // 进行滑动裁剪
-            slide_capture(sa, file_idx, actual_split_count);
 
-            if (!is_first && file_idx == 0) {
-                continue;
+            std::stringstream ss;
+            for (const auto& item : save_file_names) {
+                ss << item << ",";
             }
+            auto split_path = ss.str();
+            if (!split_path.empty() && split_path.back() == ',') {
+                split_path.pop_back();
+            }
+            Info("\nsrc_abs_path: {},\ndst_abs_path: {},\ndst_abs_split_paths: [ {} ]", src_abs_path.string(), dst_abs_path.string(), split_path);
+            Logger::flush();
+
             actual_count.fetch_add(1);
-			// 更新进度条
-			const auto bar_count = total - bad_count.load(std::memory_order_relaxed);
+            // 更新进度条
+            const auto bar_count = total - bad_count.load(std::memory_order_relaxed);
             bar.set_option(option::MaxProgress{ bar_count });
             bar.set_option(option::PostfixText{ std::format("{}({})/{}, S:{}",
                 actual_count.load(std::memory_order_relaxed),
-                actual_split_count.load(std::memory_order_relaxed), 
+                actual_split_count.load(std::memory_order_relaxed),
                 bar_count,
-                total)});
+                total) });
             bar.tick();
-        } while (++file_idx < m_saveCount);
-        Info("Task-{}( {} )_Part-{} finished. Should save count: {}, Actual save count: {}, Actual save split count: {}", 
+        }
+        Info("Task-{}( {} )_Part-{} finished. Should save count: {}, Actual save count: {}, Actual save split count: {}",
             task_index, setting_name, subtask_index, m_saveCount, file_idx, actual_count.load(std::memory_order_relaxed));
     }
 };
@@ -956,20 +615,19 @@ std::vector<std::vector<std::string>> split_with_overlap(const std::vector<std::
 {
     std::vector<std::vector<std::string>> result;
     if (n == 0 || input.empty()) return result;
-
+    result.reserve(n);
     const auto total = input.size();
-    const auto base_size = total / n;
-    const auto remainder = total % n;
-    auto start = 0;
+    const auto base_size = static_cast<int>(std::ceil(static_cast<double>(total) / static_cast<double>(n))) + 1;
+    int start{ 0 };
+    int end{ 0 };
     for (auto i{ 0 }; i < n; ++i) {
-        auto part_size = base_size + (i < remainder ? 1 : 0);
-        if (i > 0 && start > 0) {
-            --start;
-            ++part_size;
+        start = i == 0 ? i * base_size : i * (base_size - 1);
+        end = start + base_size;
+        if (end > total) {
+            end = total;
+			i = n; // 结束循环
         }
-        if (start + part_size > total) part_size = total - start;
-        result.emplace_back(input.begin() + start, input.begin() + start + part_size);
-        start += part_size;
+        result.emplace_back(input.begin() + start, input.begin() + end);
     }
     return result;
 }
@@ -1018,7 +676,7 @@ void Copier::copy()
     ThreadPool pool{ m_threadCount };
     std::cout<< std::endl << std::endl;
     int task_index{1};
-    show_console_cursor(false);
+    indicators::show_console_cursor(false);
 
     for (const auto& copy_file_info : m_copyFileInfos) {
         for (const auto& [count, label_name, src_last_dir,
@@ -1058,12 +716,14 @@ void Copier::copy()
             };
             bar.set_option(option::PostfixText{ std::format("{}/{}",0, count) });
             const auto split_file_names = split_with_overlap(file_names, m_threadCount);
+			const auto split_count = split_file_names.size();
+            const auto repeat_count = split_count - 1;
             std::vector<std::future<void>> results;
-            results.reserve(m_threadCount);
+            results.reserve(split_count);
             std::atomic<int> bad_count{ 0 };
             std::atomic<int> actual_count{ 0 };
             std::atomic<int> actual_split_count{ 0 };
-            for (auto i{ 0 }; i < m_threadCount; ++i) {
+            for (auto i{ 0 }; i < split_count; ++i) {
                 std::vector<std::string> temp_file_names = split_file_names[i];
                 const auto temp_subtask_index = i;
                 const auto temp_src_last_dir = src_last_dir;
@@ -1093,27 +753,39 @@ void Copier::copy()
                 result.get();
             }
             bar.mark_as_completed();
+            const auto tmp_actual_count = actual_count.load(std::memory_order_relaxed) - repeat_count;
+			const auto tmp_bad_count = bad_count.load(std::memory_order_relaxed);
+			const auto tmp_actual_split_count = actual_split_count.load(std::memory_order_relaxed);
             {
                 const auto msg = std::format("汇总: 应拷贝数量: {}, 实际拷贝数量: {}, 错误图片数量: {}, 实际拆分拷贝数量: {}",
-                    count, actual_count.load(std::memory_order_relaxed), bad_count.load(std::memory_order_relaxed),
-                    actual_split_count.load(std::memory_order_relaxed));
+                    count, tmp_actual_count, tmp_bad_count,
+                    tmp_actual_split_count);
                 std::cout << msg << std::endl;
                 Info("{}", msg);
             }
-            // 测试先注释掉重命名操作
-            std::filesystem::rename(src_last_dir, src_last_rename_dir);
-            {
+            if (count == (tmp_bad_count + tmp_actual_count)) {
+                std::filesystem::rename(src_last_dir, src_last_rename_dir);
+                {
+                    const auto time_str = std::format("{:%Y-%m-%d %H:%M:%S}", std::chrono::system_clock::now());
+                    const auto msg = std::format("拷贝结束时间: {}\n文件拷贝完成, 并重命名源目录: {}\n<============== [ Task-{}( {} ) 拷贝完成! ] ==============>",
+                        time_str, src_last_rename_dir.string(), task_index++, label_name);
+                    std::cout << msg << std::endl;
+                    Info("{}", msg);
+                }
+                std::cout << std::endl << std::endl;
+            }
+            else {
                 const auto time_str = std::format("{:%Y-%m-%d %H:%M:%S}", std::chrono::system_clock::now());
-                const auto msg = std::format("拷贝结束时间: {}\n文件拷贝完成, 并重命名源目录: {}\n<============== [ Task-{}( {} ) 拷贝完成! ] ==============>",
-                    time_str, src_last_rename_dir.string(), task_index++, label_name);
+                const auto msg = std::format("拷贝结束时间: {}\n文件拷贝失败 \n<============== [ Task-{}( {} ) 拷贝失败，请核对! ] ==============>",
+                    time_str, task_index++, label_name);
                 std::cout << msg << std::endl;
                 Info("{}", msg);
+                std::cout << std::endl << std::endl;
             }
-            std::cout << std::endl << std::endl;
         }
     }
     
-    show_console_cursor(true);
+    indicators::show_console_cursor(true);
     {
         const auto msg = "所有文件拷贝完成!";
         std::cout << msg << std::endl;
