@@ -20,6 +20,7 @@ module;
 #include <NvOnnxParser.h>
 #include <zbar.h>
 #include <opencv2/opencv.hpp>
+#include <opencv2/wechat_qrcode.hpp>
 
 export module detecter;
 
@@ -67,6 +68,7 @@ export struct QrCodeResult {
     cv::Point2i RightTop;
 };
 
+
 /**
  * @brief Zbar 二维码识别类
  */
@@ -109,7 +111,12 @@ bool Recognize::detect(const cv::Mat &input_mat, QrCodeResult& qrret)
     }
     const auto width = gray.cols;
     const auto height = gray.rows;
-    zbar::Image img(width,height,"Y800",gray.data,width*height);
+    cv::Mat binary;
+    cv::threshold(gray, binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, { 3,3 });
+    cv::morphologyEx(binary, binary, cv::MORPH_OPEN, kernel);
+    cv::morphologyEx(binary, binary, cv::MORPH_CLOSE, kernel);
+    zbar::Image img(width,height,"Y800", binary.data, width*height);
     bool is_ok{ false };
     try
     {

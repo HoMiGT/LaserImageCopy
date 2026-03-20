@@ -45,10 +45,10 @@ struct Config
 {
     std::vector<std::string> src_dir;
     std::vector<std::string> dst_dir;
-    bool open_crop{false};
+    bool open_crop{ false };
     std::string model;
     std::string extract_config_dir;
-	int concurrency_number{ 1 };
+    int concurrency_number{ 1 };
 };
 
 /**
@@ -70,36 +70,40 @@ static Config load_config(const std::string_view path = "./config.json")
     if (j.contains("srcDir") && j["srcDir"].is_array())
     {
         config.src_dir = j["srcDir"].get<std::vector<std::string>>();
-    }else
+    }
+    else
     {
         const auto msg = std::string("Missing or incorrect fields in configuration: src_dir");
         Error("{}", msg);
         return config;
     }
 
-    if (j.contains("dstDir")&&j["dstDir"].is_array())
+    if (j.contains("dstDir") && j["dstDir"].is_array())
     {
         config.dst_dir = j["dstDir"].get<std::vector<std::string>>();
-    }else
+    }
+    else
     {
         const auto msg = std::string("Missing or incorrect fields in configuration: dst_dir");
-        Error("{}",msg);
+        Error("{}", msg);
         return config;
     }
     if (j.contains("openCrop") && j["openCrop"].is_boolean())
     {
         config.open_crop = j["openCrop"].get<bool>();
-    }else
+    }
+    else
     {
-        config.open_crop=false;
+        config.open_crop = false;
     }
     if (j.contains("model") && j["model"].is_string())
     {
         config.model = j["model"].get<std::string>();
-    }else
+    }
+    else
     {
         const auto msg = std::string("Missing or incorrect fields in configuration: model");
-        Error("{}",msg);
+        Error("{}", msg);
         return config;
     }
     if (j.contains("extractConfigDir") && j["extractConfigDir"].is_string())
@@ -107,16 +111,16 @@ static Config load_config(const std::string_view path = "./config.json")
         config.extract_config_dir = j["extractConfigDir"].get<std::string>();
     }
     else {
-		const auto msg = std::string("Missing or incorrect fields in configuration: extractConfigDir");
+        const auto msg = std::string("Missing or incorrect fields in configuration: extractConfigDir");
         Error("{}", msg);
         return config;
     }
-	if (j.contains("concurrencyNumber") && j["concurrencyNumber"].is_number_integer())
+    if (j.contains("concurrencyNumber") && j["concurrencyNumber"].is_number_integer())
     {
-		config.concurrency_number = j["concurrencyNumber"].get<int>();
+        config.concurrency_number = j["concurrencyNumber"].get<int>();
     }
     else {
-		config.concurrency_number = 1;
+        config.concurrency_number = 1;
     }
     return config;
 }
@@ -161,7 +165,7 @@ struct LabelCoordinates {
  */
 struct DirFiles
 {
-    int count{0};
+    int count{ 0 };
     std::string label_name;
     std::filesystem::path src_last_dir;
     std::filesystem::path src_last_rename_dir;
@@ -178,7 +182,7 @@ struct DirFiles
  */
 struct CopyDirInfo
 {
-    int count{0};
+    int count{ 0 };
     std::filesystem::path src_root;
     std::filesystem::path dst_root;
     std::vector<DirFiles> dir_files;
@@ -191,7 +195,7 @@ export class Copier
 {
 public:
     explicit Copier();
-    ~Copier()=default;
+    ~Copier() = default;
     /**
      * @brief 拷贝文件 同时会进行图片裁剪
      */
@@ -199,14 +203,14 @@ public:
 
 private:
     Config m_config{};
-    size_t m_threadCount{0};
+    size_t m_threadCount{ 0 };
     std::vector<CopyDirInfo> m_copyFileInfos;
     bool is_ok{ false };
     std::unordered_map<std::string, std::string> m_extract_pinyin;
     std::unordered_map<std::string, ExtractParam> m_extract_params;
     void collect_files();
-    auto load_extract_params(std::string_view label_name)->bool;
-    auto load_extract_pinyin()->bool;
+    auto load_extract_params(std::string_view label_name) -> bool;
+    auto load_extract_pinyin() -> bool;
 };
 
 struct TaskParam {
@@ -214,9 +218,9 @@ struct TaskParam {
     std::filesystem::path srcRenamePath;
     std::filesystem::path dstPath;
     std::vector<std::string> fileNames;
-	ExtractParam extractParam;
-	bool isFirst{ true };
-	Recognize recognize;
+    ExtractParam extractParam;
+    bool isFirst{ true };
+    Recognize recognize;
     Location<float> location;
     bool isInitialize{ false };
     explicit TaskParam(const std::filesystem::path& src_path,
@@ -225,8 +229,8 @@ struct TaskParam {
         std::vector<std::string>&& file_names,
         const ExtractParam& param,
         const bool is_first,
-        const std::string& model_path) 
-        : srcPath(src_path),srcRenamePath(src_rename_path),dstPath(dst_path)
+        const std::string& model_path)
+        : srcPath(src_path), srcRenamePath(src_rename_path), dstPath(dst_path)
         , fileNames(std::move(file_names)), extractParam(param), isFirst(is_first)
         , recognize(), location(model_path)
     {
@@ -394,14 +398,14 @@ inline static bool transformer_coordinates(const cv::Rect2i& box, const QrCodeRe
 /// 滑动区域
 /// </summary>
 struct SlideArea {
-	int sx{ 0 };
-	int ex{ 0 };
+    int sx{ 0 };
+    int ex{ 0 };
     int sy{ 0 };
-	int ey{ 0 };
+    int ey{ 0 };
 };
 
 
-inline static std::string find_id(const std::string& qr_context, int id) {
+inline static std::string find_id(const std::string& qr_context) {
     auto pos = qr_context.find("?");
     std::string code_id;
     if (pos != std::string::npos) {
@@ -413,7 +417,12 @@ inline static std::string find_id(const std::string& qr_context, int id) {
             code_id = qr_context.substr(pos + 1);   // 从 '=' 后一位到结尾
         }
         else {
-            code_id = std::to_string(id);
+            if (qr_context.starts_with("http")) {
+                return "";
+            }
+            else {
+                return qr_context;
+            }
         }
     }
     return code_id;
@@ -421,27 +430,27 @@ inline static std::string find_id(const std::string& qr_context, int id) {
 
 class Task {
     std::unique_ptr<TaskParam> m_param; // 外部参数
-	cv::Mat m_matStitch;  // 拼接图像
-	cv::Mat m_matEnd;  // 图片尾部
-	float m_dpi{ 0.0f };  // DPI
-	LabelCoordinates m_labelFirstLineMin;  // 第一行最小标签
-	LabelCoordinates m_labelSecondLineAny;  // 第二行任意标签
+    cv::Mat m_matStitch;  // 拼接图像
+    cv::Mat m_matEnd;  // 图片尾部
+    float m_dpi{ 0.0f };  // DPI
+    LabelCoordinates m_labelFirstLineMin;  // 第一行最小标签
+    LabelCoordinates m_labelSecondLineAny;  // 第二行任意标签
     LabelCoordinates m_currentLc;  // 动态当前行
     LabelCoordinates m_previousLc;  // 前一行
-	bool m_isFoundValidLabel{ false };  // 是否找到有效标签
-	int m_meanHeight{ 0 };  // 平均高度
+    bool m_isFoundValidLabel{ false };  // 是否找到有效标签
+    int m_meanHeight{ 0 };  // 平均高度
     int m_meanWidth{ 0 }; // 平均宽度
-	int m_stepVertical{ 0 };  // 垂直步进
-	int m_stepHorizontal{ 0 };  // 水平步进
-	int m_lineSapce{ 0 };  // 行距
-	int m_splitCount{ 0 };  // 分割数量
-	int m_saveCount{ 0 };  // 保存数量
+    int m_stepVertical{ 0 };  // 垂直步进
+    int m_stepHorizontal{ 0 };  // 水平步进
+    int m_lineSapce{ 0 };  // 行距
+    int m_splitCount{ 0 };  // 分割数量
+    int m_saveCount{ 0 };  // 保存数量
 
 
 
 public:
     explicit Task(std::unique_ptr<TaskParam>&& param)
-        : m_param{std::move(param)}
+        : m_param{ std::move(param) }
     {
         m_saveCount = m_param->fileNames.size();
     }
@@ -450,7 +459,7 @@ public:
     void run(BlockProgressBar& bar, int subtask_index, const int task_index, const std::string& setting_name,
         std::atomic<int>& actual_count, std::atomic<int>& actual_split_count, std::atomic<int>& bad_count,
         const int total) {
-        if (!m_param->isInitialize){
+        if (!m_param->isInitialize) {
             Error("Task-{}( {} )_Part-{} initialization failed, skip the task!", task_index, setting_name, subtask_index);
             return;
         }
@@ -461,7 +470,7 @@ public:
         const auto& file_names = m_param->fileNames;
         const auto& is_first = m_param->isFirst;
         int valid_first_index{ 0 };
-        
+
         cv::Mat tmp_mat;
         cv::Mat mat_src;
 
@@ -470,10 +479,10 @@ public:
 
         const auto& dst_last_dir = m_param->dstPath;
 
-		std::unordered_map<std::string, int> code_id_count; // 二维码ID计数器
-        for (auto idx{ 0 }; idx < m_saveCount; ++idx){
+        std::unordered_map<std::string, int> code_id_count; // 二维码ID计数器
+        for (auto idx{ 0 }; idx < m_saveCount; ++idx) {
             const auto src_abs_path = src_path / file_names[idx];
-            if (tmp_mat.empty()){
+            if (tmp_mat.empty()) {
                 mat_src = cv::imread(src_abs_path.string());
             }
             else {
@@ -483,9 +492,9 @@ public:
                     bad_count.fetch_add(1);
                     continue;
                 }
-				cv::vconcat(tmp_mat, tmp_src, mat_src);
+                cv::vconcat(tmp_mat, tmp_src, mat_src);
             }
-			const auto width = mat_src.cols;
+            const auto width = mat_src.cols;
             const auto height = mat_src.rows;
             std::vector<cv::Rect> boxes;
             if (const auto ret = location.infer(mat_src, boxes); !ret) {
@@ -504,7 +513,7 @@ public:
                 if (cropped.empty()) {
                     continue;
                 }
-				//cv::imwrite("cropped.png", cropped);
+                //cv::imwrite("cropped.png", cropped);
                 if (!cropped.isContinuous()) {
                     cropped = cropped.clone();
                 }
@@ -520,13 +529,13 @@ public:
                 if (lc.label.x < 0 || lc.label.y < 0 || lc.label.x > width || lc.label.y > height || lc.label.x + lc.label.width > width || lc.label.y + lc.label.height > height) {
                     continue;
                 }
-                const auto tmp_save_src = mat_src.clone();
-				//cv::rectangle(tmp_save_src, lc.label, cv::Scalar(255, 0, 0), 8);
+                //const auto tmp_save_src = mat_src.clone();
+                //cv::rectangle(tmp_save_src, lc.label, cv::Scalar(255, 0, 0), 8);
                 //cv::imwrite("mat_src.png", tmp_save_src);
-				//cv::imshow("cropped", cropped);
-				//cv::namedWindow("mat_src", cv::WINDOW_NORMAL | cv::WINDOW_KEEPRATIO);
-				//cv::imshow("mat_src", mat_src);
-				//cv::waitKey(0);
+                //cv::imshow("cropped", cropped);
+                //cv::namedWindow("mat_src", cv::WINDOW_NORMAL | cv::WINDOW_KEEPRATIO);
+                //cv::imshow("mat_src", mat_src);
+                //cv::waitKey(0);
                 lcs_yes.emplace_back(std::move(lc));
             }
             const auto crop_y = static_cast<int>(static_cast<double>(height) * 3.0 / 4.0 + 0.5);
@@ -541,12 +550,13 @@ public:
             const auto file_ext = dst_abs_path.extension().string();
             auto yes_idx{ 0 };
             std::vector<std::string> save_file_names;
-            for (const auto& item: lcs_yes){
+            const auto tmp_size = lcs_yes.size();
+            for (const auto& item : lcs_yes) {
                 const auto save_mat = mat_src(item.label);
                 yes_idx++;
-				const std::string code_id = find_id(item.qr_context, yes_idx);
-                if (code_id_count.find(code_id) == code_id_count.end()) {
-                    code_id_count[code_id] = 1;
+                std::string code_id = find_id(item.qr_context);
+                if (code_id.empty()) {
+                    code_id = std::to_string(yes_idx);
                     const auto save_file_name = std::format("{}_{}{}", file_stem, code_id, file_ext);
                     const auto save_abs_path = (dst_last_dir / save_file_name).string();
                     cv::imwrite(save_abs_path, save_mat);
@@ -554,10 +564,19 @@ public:
                     actual_split_count.fetch_add(1);
                 }
                 else {
-                    code_id_count[code_id]++;
-				}
+                    if (code_id_count.find(code_id) == code_id_count.end()) {
+                        code_id_count[code_id] = 1;
+                        const auto save_file_name = std::format("{}_{}{}", file_stem, code_id, file_ext);
+                        const auto save_abs_path = (dst_last_dir / save_file_name).string();
+                        cv::imwrite(save_abs_path, save_mat);
+                        save_file_names.emplace_back(save_file_name);
+                        actual_split_count.fetch_add(1);
+                    }
+                    else {
+                        code_id_count[code_id]++;
+                    }
+                }
             }
-
             std::stringstream ss;
             for (const auto& item : save_file_names) {
                 ss << item << ",";
@@ -587,21 +606,21 @@ public:
 
 
 Copier::Copier()
-    :m_config{load_config()}
+    :m_config{ load_config() }
 {
     if (m_config.src_dir.empty())
     {
-		Error("配置文件没有加载成功！");
+        Error("配置文件没有加载成功！");
         return;
     }
     m_threadCount = m_config.concurrency_number;
     if (m_config.src_dir.size() != m_config.dst_dir.size()) {
-		Error("源目录和目标目录配置错误，长度不一致！");
+        Error("源目录和目标目录配置错误，长度不一致！");
         return;
     }
-	const auto config_size = m_config.src_dir.size();
-	m_copyFileInfos.reserve(config_size);
-	for (auto i{ 0 }; i < config_size; ++i) {
+    const auto config_size = m_config.src_dir.size();
+    m_copyFileInfos.reserve(config_size);
+    for (auto i{ 0 }; i < config_size; ++i) {
         CopyDirInfo info;
         info.src_root = std::filesystem::path(m_config.src_dir[i]);
         info.dst_root = std::filesystem::path(m_config.dst_dir[i]);
@@ -625,7 +644,7 @@ std::vector<std::vector<std::string>> split_with_overlap(const std::vector<std::
         end = start + base_size;
         if (end > total) {
             end = total;
-			i = n; // 结束循环
+            i = n; // 结束循环
         }
         result.emplace_back(input.begin() + start, input.begin() + end);
     }
@@ -637,15 +656,15 @@ void Copier::copy()
     if (!is_ok)
     {
         const auto msg = "拷贝器没有初始化成功，无法进行拷贝操作!";
-        std::cout<< msg << std::endl;
-        Info("{}", msg);
-        return;
-	}
-    if (const auto ret = load_extract_pinyin(); !ret) {
-		const auto msg = "加载提取参数失败，无法进行拷贝操作!";
         std::cout << msg << std::endl;
         Info("{}", msg);
-		return;
+        return;
+    }
+    if (const auto ret = load_extract_pinyin(); !ret) {
+        const auto msg = "加载提取参数失败，无法进行拷贝操作!";
+        std::cout << msg << std::endl;
+        Info("{}", msg);
+        return;
     }
     collect_files();
     auto task_count = 0;
@@ -655,27 +674,27 @@ void Copier::copy()
         std::stringstream ss_dst;
         for (const auto& info : m_copyFileInfos) {
             task_count += info.dir_files.size();
-			copy_count += info.count;
+            copy_count += info.count;
             ss_src << info.src_root.string() << "; ";
-			ss_dst << info.dst_root.string() << "; ";
+            ss_dst << info.dst_root.string() << "; ";
         }
         const auto msg = std::format("拷贝的任务总数: {}\n拷贝文件的数量: {}\n拷贝目录的源文件根目录: {}\n拷贝目录的目标文件根目录: {}\n",
             task_count, copy_count, ss_src.str(), ss_dst.str());
         std::cout << msg << std::endl;
         Info("{}", msg);
     }
-    if (task_count==0 || copy_count == 0)
+    if (task_count == 0 || copy_count == 0)
     {
         const auto msg = "没有要拷贝的图片数据!";
         std::cout << msg << std::endl;
         Info("{}", msg);
         return;
     }
-    const std::array<Color,7> colors{ Color::grey, Color::red, Color::green, Color::yellow, Color::blue,Color::magenta, Color::cyan};
-    
+    const std::array<Color, 7> colors{ Color::grey, Color::red, Color::green, Color::yellow, Color::blue,Color::magenta, Color::cyan };
+
     ThreadPool pool{ m_threadCount };
-    std::cout<< std::endl << std::endl;
-    int task_index{1};
+    std::cout << std::endl << std::endl;
+    int task_index{ 1 };
     indicators::show_console_cursor(false);
 
     for (const auto& copy_file_info : m_copyFileInfos) {
@@ -716,7 +735,7 @@ void Copier::copy()
             };
             bar.set_option(option::PostfixText{ std::format("{}/{}",0, count) });
             const auto split_file_names = split_with_overlap(file_names, m_threadCount);
-			const auto split_count = split_file_names.size();
+            const auto split_count = split_file_names.size();
             const auto repeat_count = split_count - 1;
             std::vector<std::future<void>> results;
             results.reserve(split_count);
@@ -754,8 +773,8 @@ void Copier::copy()
             }
             bar.mark_as_completed();
             const auto tmp_actual_count = actual_count.load(std::memory_order_relaxed) - repeat_count;
-			const auto tmp_bad_count = bad_count.load(std::memory_order_relaxed);
-			const auto tmp_actual_split_count = actual_split_count.load(std::memory_order_relaxed);
+            const auto tmp_bad_count = bad_count.load(std::memory_order_relaxed);
+            const auto tmp_actual_split_count = actual_split_count.load(std::memory_order_relaxed);
             {
                 const auto msg = std::format("汇总: 应拷贝数量: {}, 实际拷贝数量: {}, 错误图片数量: {}, 实际拆分拷贝数量: {}",
                     count, tmp_actual_count, tmp_bad_count,
@@ -784,7 +803,7 @@ void Copier::copy()
             }
         }
     }
-    
+
     indicators::show_console_cursor(true);
     {
         const auto msg = "所有文件拷贝完成!";
@@ -793,10 +812,10 @@ void Copier::copy()
     }
 }
 
-static long long extract_number(const std::string &s,bool &ok)
+static long long extract_number(const std::string& s, bool& ok)
 {
     static const std::regex re(R"((\d+))");
-    if (std::smatch m; std::regex_search(s,m,re) && m.size() >=2)
+    if (std::smatch m; std::regex_search(s, m, re) && m.size() >= 2)
     {
         ok = true;
         return std::stoll(m.str(1));
@@ -808,15 +827,15 @@ static long long extract_number(const std::string &s,bool &ok)
 static void sort_files(std::vector<std::string>& files)
 {
     std::sort(files.begin(), files.end(), [](const std::string& a, const std::string& b)
-    {
-        bool ok_a{false};
-        bool ok_b{false};
-        const auto num_a = extract_number(a,ok_a);
-        const auto num_b = extract_number(b,ok_b);
-        if (ok_a && ok_b) return num_a < num_b;
-        if (ok_a != ok_b) return ok_a;
-        return a < b;
-    });
+        {
+            bool ok_a{ false };
+            bool ok_b{ false };
+            const auto num_a = extract_number(a, ok_a);
+            const auto num_b = extract_number(b, ok_b);
+            if (ok_a && ok_b) return num_a < num_b;
+            if (ok_a != ok_b) return ok_a;
+            return a < b;
+        });
 }
 
 void Copier::collect_files()
@@ -869,9 +888,9 @@ auto Copier::load_extract_pinyin() -> bool {
     bool flag{ false };
     for (const auto& config_entry : std::filesystem::directory_iterator(m_config.extract_config_dir)) {
         if (!config_entry.is_regular_file()) continue;
-		const std::string file_name = config_entry.path().stem().string();
+        const std::string file_name = config_entry.path().stem().string();
         const std::string pinyin_file_name = qStringToPinYin(QString::fromStdString(file_name));
-		m_extract_pinyin[pinyin_file_name] = file_name;
+        m_extract_pinyin[pinyin_file_name] = file_name;
         flag = true;
     }
     return flag;
@@ -884,11 +903,11 @@ auto Copier::load_extract_params(const std::string_view label_name)->bool
         return true;
     }
     std::filesystem::path extract_config_path(m_config.extract_config_dir);
-    try { 
-        extract_config_path /= std::format("{}.json", m_extract_pinyin[label_name.data()]); 
+    try {
+        extract_config_path /= std::format("{}.json", m_extract_pinyin[label_name.data()]);
     }
     catch (std::exception& e) {
-		Warn("文件夹拼音名称: {} 对应的标签配置未找到: {}", label_name, e.what());
+        Warn("文件夹拼音名称: {} 对应的标签配置未找到: {}", label_name, e.what());
         return false;
     }
 
