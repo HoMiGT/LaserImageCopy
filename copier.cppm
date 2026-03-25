@@ -371,7 +371,7 @@ inline static bool transformer_coordinates(const cv::Rect2i& box, const QrCodeRe
         qr_left_top_point.x = p0.x + qrret.LeftTop.x;
         qr_left_top_point.y = p0.y + qrret.LeftTop.y;
         const auto label_left_top_x = qr_left_top_point.x - label_x_distance;
-        const auto label_left_top_y = qr_left_top_point.y + label_y_distance - label_width;
+        const auto label_left_top_y = qr_left_top_point.y + label_y_distance - label_height;
         lc.label.x = static_cast<int>(label_left_top_x + 0.5) + col_offset;
         lc.label.y = static_cast<int>(label_left_top_y + 0.5) + row_offset;
         lc.label.width = static_cast<int>(label_width + 0.5);
@@ -530,7 +530,7 @@ public:
                     continue;
                 }
                 //const auto tmp_save_src = mat_src.clone();
-                //cv::rectangle(tmp_save_src, lc.label, cv::Scalar(255, 0, 0), 8);
+                //cv::rectangle(tmp_save_src, lc.label, cv::Scalar(0, 0, 255), 8);
                 //cv::imwrite("mat_src.png", tmp_save_src);
                 //cv::imshow("cropped", cropped);
                 //cv::namedWindow("mat_src", cv::WINDOW_NORMAL | cv::WINDOW_KEEPRATIO);
