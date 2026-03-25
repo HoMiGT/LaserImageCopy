@@ -406,15 +406,15 @@ struct SlideArea {
 
 
 inline static std::string find_id(const std::string& qr_context) {
-    auto pos = qr_context.find("?");
+    auto pos = qr_context.find("=");
     std::string code_id;
     if (pos != std::string::npos) {
-        code_id = qr_context.substr(pos + 1);   // 从 '?' 后一位到结尾
+        code_id = qr_context.substr(pos + 1);   // 从 '=' 后一位到结尾
     }
     else {
-        pos = qr_context.find("=");
+        pos = qr_context.find("?");
         if (pos != std::string::npos) {
-            code_id = qr_context.substr(pos + 1);   // 从 '=' 后一位到结尾
+            code_id = qr_context.substr(pos + 1);   // 从 '?' 后一位到结尾
         }
         else {
             if (qr_context.starts_with("http")) {
